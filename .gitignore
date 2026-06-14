@@ -1,0 +1,13 @@
+# 第三方参考脚本（仅本地调研用，遵循其各自许可证，不随本仓库分发）
+reference/
+
+# 设计/调研文档（仅本地用于辅助开发，不随仓库发布）
+DESIGN.md
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+*.log
+node_modules/
+.vscode/
+.idea/

@@ -1,0 +1,58 @@
+name: 🐛 Bug 报告
+description: 反馈拦截失效、破版、误杀或脚本报错
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！提交前请先搜索是否已有相同 Issue。开启面板里的「调试模式」能让控制台逐卡打印拦/放原因，更易定位。
+  - type: dropdown
+    id: page
+    attributes:
+      label: 出问题的页面
+      options:
+        - 首页 (home)
+        - 热门 (popular)
+        - 排行榜 (rank)
+        - 搜索页 (search)
+        - 播放页 (video)
+        - 其他 / 不确定
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 ...
+        2. 添加规则 ...
+        3. 看到 ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为 vs 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 控制台日志
+      description: F12 控制台筛选 `[hoyoFairy]`，把相关日志贴这里（开调试模式更全）。
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: 脚本版本 @version
+      placeholder: "0.0.1"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 浏览器 + Tampermonkey 版本
+      placeholder: "Edge 126 / Tampermonkey 5.x"
+    validations:
+      required: true
