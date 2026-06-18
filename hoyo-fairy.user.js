@@ -1,11 +1,12 @@
 // ==UserScript==
-// @name         hoyoFairy · 抗击黑潮
+// @name         biliHoyoFairy · 抗击黑潮
 // @namespace    https://github.com/gendu-amd/hoyo-fairy
-// @version      0.0.1
-// @description  清理 B 站推荐流里的黑流量、引战视频、商业广告，并屏蔽你不想看的 UP 主。支持按 标签/UP主/UID/关键词(可正则)/时长/播放量/BV 精准过滤；覆盖首页/热门/排行榜/搜索/播放页；白名单优先防误伤；右键一键屏蔽/拉黑(同步账号黑名单)；内置预置关键词库。
-// @author       gendu
+// @version      0.0.2
+// @description  B站(bilibili)推荐流净化：屏蔽黑流量、引战视频、商业广告与不想看的 UP 主。支持按 标签/UP主/UID/关键词(可正则)/分区/时长/播放量/BV 精准过滤；覆盖首页/热门/排行榜/搜索/播放页/动态/评论区；白名单优先防误伤；右键一键屏蔽/拉黑(同步账号黑名单)；内置预置关键词库。
+// @author       gendu-amd
 // @match        https://www.bilibili.com/*
 // @match        https://search.bilibili.com/*
+// @match        https://t.bilibili.com/*
 // @updateURL    https://raw.githubusercontent.com/gendu-amd/hoyo-fairy/main/hoyo-fairy.user.js
 // @downloadURL  https://raw.githubusercontent.com/gendu-amd/hoyo-fairy/main/hoyo-fairy.user.js
 // @connect      api.bilibili.com
@@ -33,18 +34,45 @@
   'use strict';
 
   /* ===================== 0. 常量与配置 ===================== */
-  const VERSION = '0.0.1';
+  // 单一来源：直接读脚本头 @version，避免与常量双写漂移
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.0.1';
   const STORE_KEY = 'bfb_config_v2';
   const BLACKLIST_MANAGE_URL = 'https://account.bilibili.com/account/blacklist';
   const BADGE = 'color:#fff;background:#fb7299;padding:0 4px;border-radius:3px'; // 控制台日志的品牌徽标样式
+
+  // DOM 标记属性（集中常量，避免散落硬编码改一处漏一处）。卡片"已处理"标记见下方 PROCESSED。
+  const ATTR_API = 'data-bfb-api'; // 卡片已发起 API 评估
+  const ATTR_BLOCKED = 'data-bfb-blocked'; // 卡片已被拦截（供批量拉黑扫描）
+
+  // —— 统一日志 ——（debug 关时零开销；err 始终输出，便于线上排查）
+  function log(...args) {
+    if (CONFIG.debug) console.log(`%c[hoyoFairy]%c`, BADGE, 'color:inherit', ...args);
+  }
+  function logErr(where, e) {
+    try {
+      console.warn(`%c[hoyoFairy]%c ${where}`, BADGE, 'color:#e74c3c', e);
+    } catch (_) {}
+  }
+  // 错误边界：包装易抛错的回调/逐项处理，单点异常不拖垮整轮（B 站改版/异形 DOM 时尤其重要）
+  function safe(where, fn) {
+    return function () {
+      try {
+        return fn.apply(this, arguments);
+      } catch (e) {
+        logErr(where, e);
+      }
+    };
+  }
 
   const DEFAULT_CONFIG = {
     enabled: true,
     reviewMode: false, // 审查模式：被拦视频不删/不隐，而是标记+就地放行，便于核对防误伤
     rightClickBlock: true,
+    cardHoverBtn: false, // 悬停卡片时显示快捷「拉黑」浮层按钮（独立浮层，不改 B 站卡片 DOM）
     blacklistCollab: false, // 拉黑联合投稿时，是否把所有合作者一并拉黑
     block: {
       keywords: [], // 命中 标题/UP名/分区（标签需开精确过滤）；普通词=包含，/.../ =正则
+      partitions: [], // 视频分区(tname)黑名单；普通词=包含，/.../ =正则（网络拦截层最准）
       upNames: [],
       uids: [],
       bvids: [],
@@ -58,9 +86,28 @@
     },
     allow: { keywords: [], upNames: [], uids: [] },
     hideAd: false,
+    hideLiveCard: false, // 屏蔽信息流里的直播推荐卡（首页/动态里链向 live.bilibili.com 的卡）
     hideHotSearch: false,
     apiFilters: false, // 精确过滤总开关（关闭时完全不联网）
     hideCharging: false, // 充电专属视频（API）
+    boostFeedLoad: false, // 增大首页推荐每次请求的视频数（拦截层删项后仍保持信息流饱满，借鉴 cleaner）
+    // —— 评论区过滤（独立一套，读评论组件 __data；仅在有评论的页面生效，借鉴 bilibili-cleaner）——
+    comment: {
+      enabled: false, // 评论区过滤总开关（关=完全不处理评论）
+      keywords: [], // 评论正文关键词黑名单（独立于视频关键词；支持 /正则/、作用域前缀无意义）
+      userNames: [], // 评论用户名精确黑名单
+      userNameKeywords: [], // 评论用户名昵称关键词黑名单（支持 /正则/）
+      minLevel: 0, // 评论者等级低于此值则隐藏（0=不启用）
+      hideNoFace: false, // 默认头像且非会员（小号/水军特征）
+      hideEmojiOnly: false, // 纯表情/纯 @ 的空洞评论
+      hideCallOnly: false, // 只含 @其他用户、无实质内容
+      hideAd: false, // 带货/导流广告评论
+      hideCallBot: false, // 召唤 AI 的评论
+      hideBot: false, // AI 机器人发布的评论
+      allowUp: true, // 白名单：UP 主本人的评论免过滤
+      allowPin: true, // 白名单：置顶评论免过滤
+      allowMe: true, // 白名单：自己发布/被 @ 的评论免过滤
+    },
     debug: false,
     blockedCount: 0,
     uidNames: {}, // uid -> UP 名 缓存（仅用于面板按名称展示；拉黑仍用 uid）
@@ -75,6 +122,16 @@
     含日语标题: ['/[ぁ-ヶ]/'],
     寄生社蛆: ['库洛', '库洛游戏', '呜哇', '鸣潮', '战双', '战双帕弥什', '漂泊者', '漂泊神游', '寄生神游', '寄生社区'],
   };
+
+  // 评论区已知 AI 机器人账号名单（借鉴 bilibili-cleaner extra/bots）
+  const COMMENT_BOTS = new Set([
+    '机器工具人', '有趣的程序员', 'AI视频小助理', 'AI视频小助理总结一下', 'AI笔记侠', 'AI视频助手',
+    '哔哩哔理点赞姬', '课代表猫', 'AI课代表呀', '木几萌Moe', '星崽丨StarZai', 'AI沈阳美食家', 'AI头脑风暴',
+    'GPT_5', 'Juice_AI', 'AI全文总结', 'AI视频总结', 'AI总结视频', 'AI工具集', 'Ai的评论', 'AI识片酱',
+    'AI知识总结', 'AI小精灵呀', 'AI课程教学', 'Ai好记', 'MilkyAi', '视频AI问答助手',
+  ]);
+  // 带货/导流广告评论特征（借鉴 cleaner）
+  const COMMENT_AD_RE = /(bili2233\.cn|b23\.tv)\/(mall-|cm-)|领券|gaoneng\.bilibili\.com/i;
 
   // 合并外部数据（存档/导入）时必须跳过这些键，否则 JSON.parse 出来的 own "__proto__"
   // 会被写进 Object.prototype，污染全局并可能破坏 B 站自身脚本。
@@ -136,7 +193,6 @@
 
   const CONFIG = loadConfig();
   let sessionBlocked = 0;
-  const bvUidCache = new Map(); // 会话内 bvid->uid 缓存（拉黑反查用；不持久化，推荐流 bvid 跨会话几乎不复用）
 
   /* ===================== 1. 工具 ===================== */
   function getCookie(name) {
@@ -144,9 +200,19 @@
     return m ? decodeURIComponent(m[2]) : '';
   }
   const lc = (s) => (s || '').toString().trim().toLowerCase();
+  // 全角→半角归一（含全角空格 U+3000），防止用全角字符绕过关键词（借鉴 bilibili-cleaner toHalfWidth）
+  function toHalfWidth(s) {
+    return (s || '')
+      .toString()
+      .replace(/[\uFF01-\uFF5E]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/\u3000/g, ' ');
+  }
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+  // 把一组规则行编译成匹配器：普通词 → 归一/转义后合并成单条正则（性能更好，借鉴 cleaner）；
+  // /.../ 行 → 各自独立编译（保留其原有 flags，如 m/s/g 语义不被合并破坏）。
   function compileLines(lines) {
-    const plains = [];
+    const plainParts = [];
     const regexes = [];
     for (const raw of lines || []) {
       const line = (raw || '').trim();
@@ -158,17 +224,49 @@
           regexes.push(new RegExp(m[1], flags.includes('i') ? flags : flags + 'i'));
         } catch (e) {}
       } else {
-        plains.push(lc(line));
+        const w = toHalfWidth(line).toLowerCase();
+        if (w) plainParts.push(escapeRe(w));
       }
     }
-    return { plains, regexes };
+    let plain = null;
+    if (plainParts.length) {
+      try {
+        plain = new RegExp(plainParts.join('|'), 'i');
+      } catch (e) {}
+    }
+    return { plain, regexes, empty: !plain && !regexes.length };
   }
   function textHit(text, matcher) {
-    if (!text) return false;
-    const low = lc(text);
-    for (const p of matcher.plains) if (p && low.includes(p)) return true;
+    if (!text || !matcher) return false;
+    if (matcher.plain && matcher.plain.test(toHalfWidth(text).toLowerCase())) return true;
     for (const r of matcher.regexes) if (r.test(text)) return true;
     return false;
+  }
+
+  // 关键词作用域：行首可加 title: / up: / part: 前缀，限定只匹配 标题/UP名/分区；
+  // 不写前缀 = 全字段（保持历史行为）。前缀仅识别这三种，其它含冒号的词（如"日入500:真相"）按普通词处理。
+  // 形如 title:/正则/ 也支持（前缀剥离后仍交给 compileLines 解析正则）。
+  const KW_SCOPES = ['title', 'up', 'part'];
+  function compileScopedKeywords(lines) {
+    const buckets = { all: [], title: [], up: [], part: [] };
+    for (const raw of lines || []) {
+      const line = (raw || '').trim();
+      if (!line) continue;
+      const m = !line.startsWith('/') && line.match(/^(title|up|part)\s*:\s*(.+)$/i);
+      if (m) buckets[m[1].toLowerCase()].push(m[2].trim());
+      else buckets.all.push(line);
+    }
+    return {
+      all: compileLines(buckets.all),
+      title: compileLines(buckets.title),
+      up: compileLines(buckets.up),
+      part: compileLines(buckets.part),
+    };
+  }
+  // 针对某字段判定：无前缀(all)的词对所有字段生效，带前缀的词只对对应字段生效
+  function kwHit(scoped, field, text) {
+    if (!scoped || !text) return false;
+    return textHit(text, scoped.all) || textHit(text, scoped[field]);
   }
   function parseDuration(s) {
     if (!s) return null;
@@ -193,9 +291,11 @@
 
   /* ===================== 2. 页面模型 ===================== */
   const IS_SEARCH = location.host === 'search.bilibili.com';
+  const IS_DYNAMIC = location.host === 't.bilibili.com';
 
   function pageType() {
     const h = location.href;
+    if (IS_DYNAMIC) return '动态';
     if (h.includes('/v/popular/rank') || h.includes('/ranking')) return '排行榜';
     if (h.includes('/v/popular')) return '热门';
     if (IS_SEARCH) return '搜索页';
@@ -213,11 +313,14 @@
     'li.rank-item', // 排行榜
     'div.video-card-reco',
     'div.video-card-common',
+    'div.bili-dyn-list__item', // 动态信息流（t.bilibili.com，选择器借鉴 bilibili-cleaner）
+    'div.floor-card.single-card', // 首页信息流里的「直播推荐」单卡（链向 live.bilibili.com）
   ].join(',');
 
   // 定位要隐藏的网格格子：显式有序链，避免破坏布局。
   function cellOf(el) {
-    const fc = el.closest('div.feed-card, div.bili-feed-card');
+    // 直播推荐卡：外层 .floor-single-card 是带宽高占位的容器，只隐内层会留黑框，故上移到它
+    const fc = el.closest('div.feed-card, div.bili-feed-card, div.floor-single-card');
     if (fc) return fc;
     if (IS_SEARCH && el.parentElement && el.parentElement !== document.body) return el.parentElement;
     return el;
@@ -244,16 +347,26 @@
     return '';
   }
 
-  function extractCardInfo(card) {
+  // deepUid: 是否为缺 UID 的卡做昂贵的 innerHTML 兜底解析（扫描热路径按需，拉黑场景强制 true）
+  function extractCardInfo(card, deepUid = true) {
     const info = { title: '', up: '', uid: '', partition: '', bvid: '', duration: null, views: null, isLive: false, isAd: false };
 
-    info.title = pickText(card, ['.bili-video-card__info--tit', '.video-name', 'h3[title]', '.title']);
+    info.title = pickText(card, [
+      '.bili-video-card__info--tit',
+      '.video-name',
+      'h3[title]',
+      '.title',
+      '.bili-dyn-card-video__title', // 动态内视频标题
+      '.dyn-card-opus__title', // 动态专栏/图文标题
+      '.bili-dyn-content__orig__desc', // 动态正文（文字动态，便于关键词命中）
+    ]);
     info.up = pickText(card, [
       '.bili-video-card__info--author',
       '.up-name__text',
       '.up-name',
       '.bili-video-card__info--owner span',
       '.upname .name',
+      '.bili-dyn-title__text', // 动态发布者
     ]);
 
     // UID（拉黑必需）：space 链接 → data-* → innerHTML 兜底（含纯文本卡内嵌的 "mid":数字）
@@ -263,8 +376,11 @@
       const midEl = card.querySelector('[data-mid],[data-up-mid],[data-user-id]');
       if (midEl) info.uid = midEl.getAttribute('data-mid') || midEl.getAttribute('data-up-mid') || midEl.getAttribute('data-user-id') || '';
     }
-    if (!info.uid) info.uid = (card.innerHTML.match(/space\.bilibili\.com\/(\d+)/) || [])[1] || '';
-    if (!info.uid) info.uid = (card.innerHTML.match(/"(?:mid|owner_?id|up_?mid)"\s*:\s*"?(\d{2,})"?/) || [])[1] || '';
+    // innerHTML 兜底会序列化整张卡 HTML，开销较大：仅在需要 UID（存在 UID 规则或拉黑场景）且 DOM 没抠到时才走
+    if (!info.uid && deepUid) {
+      info.uid = (card.innerHTML.match(/space\.bilibili\.com\/(\d+)/) || [])[1] || '';
+      if (!info.uid) info.uid = (card.innerHTML.match(/"(?:mid|owner_?id|up_?mid)"\s*:\s*"?(\d{2,})"?/) || [])[1] || '';
+    }
 
     info.partition = pickText(card, ['.bili-video-card__info--tag', '.rcmd-tag']);
 
@@ -274,32 +390,37 @@
       if (m) info.bvid = m[1];
     }
 
-    info.duration = parseDuration(pickText(card, ['.bili-video-card__stats__duration', '.duration']));
+    info.duration = parseDuration(pickText(card, ['.bili-video-card__stats__duration', '.duration', '.bili-dyn-card-video__duration']));
 
     const statEl = card.querySelector('.bili-video-card__stats--item') || card.querySelector('.play-text');
     if (statEl) info.views = parseCount(statEl.textContent);
 
-    // 直播：仅用于"别把直播误当广告"，不作为独立屏蔽项
-    info.isLive = !!(
-      card.querySelector('a[href*="live.bilibili.com"]') ||
-      card.querySelector('.bili-live-card, [class*="live-card"]') ||
-      /直播中|正在直播/.test(card.textContent || '')
-    );
+    // 直播识别：服务于「屏蔽直播推荐卡」，并避免把直播误当广告。hideAd / hideLiveCard 任一开启才算（省热路径）。
+    if (CONFIG.hideAd || CONFIG.hideLiveCard) {
+      info.isLive = !!(
+        card.querySelector('a[href*="live.bilibili.com"]') ||
+        card.querySelector('.bili-live-card, [class*="live-card"]') ||
+        /直播中|正在直播/.test(card.textContent || '')
+      );
+    }
 
-    const adBadge = Array.from(card.querySelectorAll('span,div')).some((el) => {
-      const tx = (el.textContent || '').trim();
-      return tx === '广告' || tx === '赞助' || tx === '推广';
-    });
-    const isRcmdAd =
-      card.classList && card.classList.value.trim() === 'bili-video-card is-rcmd' &&
-      !document.querySelector('div.recommend-container__2-line');
-    info.isAd = !info.isLive && !!(
-      card.querySelector('.bili-video-card__info--ad') ||
-      card.querySelector('a[href*="cm.bilibili.com"]') ||
-      card.querySelector('a[href*="//mall.bilibili.com"]') ||
-      isRcmdAd ||
-      adBadge
-    );
+    // 广告判定（含遍历全卡 span/div 找角标文案）只服务于「屏蔽广告卡」，hideAd 关时整段跳过，省热路径开销。
+    if (CONFIG.hideAd) {
+      const adBadge = Array.from(card.querySelectorAll('span,div')).some((el) => {
+        const tx = (el.textContent || '').trim();
+        return tx === '广告' || tx === '赞助' || tx === '推广';
+      });
+      // 仅用稳定的广告标识判定：官方广告类名 / 投流域名 / 运营推广链接 / 显式角标文案。
+      // （早期版本曾用「class 字符串完全等于 'bili-video-card is-rcmd' + 全局缺某容器」启发式，
+      //   极易随 B 站改版误杀正常推荐卡，已移除。）
+      info.isAd = !info.isLive && !!(
+        card.querySelector('.bili-video-card__info--ad') ||
+        card.querySelector('a[href*="cm.bilibili.com"]') ||
+        card.querySelector('a[href*="//mall.bilibili.com"]') ||
+        card.querySelector('a[href*="specialRecommendByOp"]') ||
+        adBadge
+      );
+    }
 
     return info;
   }
@@ -307,22 +428,42 @@
   /* ===================== 4. 规则匹配（白名单优先） ===================== */
   let M = buildMatchers();
   function buildMatchers() {
-    return {
-      blockKw: compileLines(CONFIG.block.keywords),
-      allowKw: compileLines(CONFIG.allow.keywords),
+    // 精确匹配维度预编译成 Set，避免每张卡每次都 map/includes/some 重建数组（大黑名单下显著更快）
+    const lcSet = (arr) => new Set((arr || []).map((x) => lc(x)).filter(Boolean));
+    const strSet = (arr) => new Set((arr || []).map(String));
+    const m = {
+      blockKw: compileScopedKeywords(CONFIG.block.keywords),
+      blockPartition: compileLines(CONFIG.block.partitions),
+      allowKw: compileScopedKeywords(CONFIG.allow.keywords),
       blockTag: compileLines(CONFIG.block.tags),
       upBio: compileLines(CONFIG.block.upBio),
+      blockUidSet: strSet(CONFIG.block.uids),
+      blockBvidSet: new Set(CONFIG.block.bvids || []),
+      blockUpNameSet: lcSet(CONFIG.block.upNames),
+      allowUidSet: strSet(CONFIG.allow.uids),
+      allowUpNameSet: lcSet(CONFIG.allow.upNames),
+      // 评论区维度（独立编译）
+      cmtKw: compileLines(CONFIG.comment.keywords),
+      cmtUserKw: compileLines(CONFIG.comment.userNameKeywords),
+      cmtUserSet: lcSet(CONFIG.comment.userNames),
     };
+    // 是否存在 UID 规则：决定扫描时要不要为缺 UID 的卡做昂贵的 innerHTML 兜底解析
+    m.needUid = m.blockUidSet.size > 0 || m.allowUidSet.size > 0;
+    return m;
   }
+  // 规则版本号：每次重建自增；评论扫描据此判断某条评论是否需重新评估（避免重复处理 + 规则变更后能刷新）
+  let ruleVersion = 0;
   function rebuildRules() {
     M = buildMatchers();
+    ruleVersion++;
   }
 
   function isWhitelisted(info) {
-    if (textHit(info.title, M.allowKw)) return true;
-    if (info.up && textHit(info.up, M.allowKw)) return true;
-    if (info.up && CONFIG.allow.upNames.some((n) => lc(n) === lc(info.up))) return true;
-    if (info.uid && CONFIG.allow.uids.map(String).includes(info.uid)) return true;
+    if (kwHit(M.allowKw, 'title', info.title)) return true;
+    if (info.up && kwHit(M.allowKw, 'up', info.up)) return true;
+    if (info.partition && kwHit(M.allowKw, 'part', info.partition)) return true;
+    if (info.up && M.allowUpNameSet.has(lc(info.up))) return true;
+    if (info.uid && M.allowUidSet.has(info.uid)) return true;
     return false;
   }
 
@@ -337,6 +478,7 @@
   // 本地同步维度（matchRule，按序短路）。各 match 自带空配置守卫，故无需 active。
   const SYNC_DIMS = [
     { match: (i) => (CONFIG.hideAd && i.isAd ? '广告卡' : null) },
+    { match: (i) => (CONFIG.hideLiveCard && i.isLive ? '直播卡' : null) },
     {
       match: (i) => {
         const b = CONFIG.block;
@@ -344,10 +486,11 @@
       },
     },
     // 关键词：标题 / UP名 / 分区任一命中即拦（标签维度在 matchApi 里补判）
-    { match: (i) => (textHit(i.title, M.blockKw) || (i.up && textHit(i.up, M.blockKw)) || textHit(i.partition, M.blockKw) ? '关键词' : null) },
-    { match: (i) => (i.up && CONFIG.block.upNames.some((n) => lc(n) === lc(i.up)) ? 'UP主:' + i.up : null) },
-    { match: (i) => (i.uid && CONFIG.block.uids.map(String).includes(i.uid) ? 'UID:' + i.uid : null) },
-    { match: (i) => (i.bvid && CONFIG.block.bvids.includes(i.bvid) ? 'BV:' + i.bvid : null) },
+    { match: (i) => (kwHit(M.blockKw, 'title', i.title) || (i.up && kwHit(M.blockKw, 'up', i.up)) || kwHit(M.blockKw, 'part', i.partition) ? '关键词' : null) },
+    { match: (i) => (i.partition && textHit(i.partition, M.blockPartition) ? '分区:' + i.partition : null) },
+    { match: (i) => (i.up && M.blockUpNameSet.has(lc(i.up)) ? 'UP主:' + i.up : null) },
+    { match: (i) => (i.uid && M.blockUidSet.has(i.uid) ? 'UID:' + i.uid : null) },
+    { match: (i) => (i.bvid && M.blockBvidSet.has(i.bvid) ? 'BV:' + i.bvid : null) },
     {
       match: (i) => {
         const b = CONFIG.block;
@@ -368,7 +511,7 @@
       match: (info, ctx) => {
         for (const t of ctx.tags) {
           if (textHit(t, M.blockTag)) return '标签:' + t;
-          if (textHit(t, M.blockKw)) return '关键词:' + t;
+          if (textHit(t, M.blockKw.all)) return '关键词:' + t; // 仅无作用域(all)的关键词对标签生效
         }
         return null;
       },
@@ -395,7 +538,7 @@
       source: 'card',
       needs: 'card',
       active: () => CONFIG.block.upBio.length,
-      match: (info, ctx) => ((M.upBio.plains.length || M.upBio.regexes.length) && textHit(ctx.sign, M.upBio) ? 'UP简介' : null),
+      match: (info, ctx) => (!M.upBio.empty && textHit(ctx.sign, M.upBio) ? 'UP简介' : null),
     },
   ];
 
@@ -452,10 +595,49 @@
     return null;
   }
 
-  /* ===================== 4b. 接口层（缓存 + 限速队列，避免频繁请求） ===================== */
+  /* ===================== 4b. 接口层（缓存 + 限速队列 + 风控熔断，避免频繁请求） ===================== */
+  // 风控熔断：B 站返回风控码时全局暂停联网并指数退避，保护账号（API 取数 + 批量拉黑共用）。
+  const RISK_CODES = new Set([-352, -412, -509, -799]); // 校验失败/被拦截/请求过频
+  const riskGuard = {
+    until: 0,
+    strikes: 0,
+    blocked() {
+      return Date.now() < this.until;
+    },
+    remaining() {
+      return Math.max(0, this.until - Date.now());
+    },
+    // 任何联网响应都喂进来：风控码→升级退避；正常码→冷却期过后清零
+    note(code) {
+      if (!RISK_CODES.has(code)) {
+        if (code === 0 && this.strikes && !this.blocked()) this.strikes = 0;
+        return;
+      }
+      const wasBlocked = this.blocked();
+      this.strikes = Math.min(this.strikes + 1, 6);
+      const backoff = Math.min(60000, 2000 * 2 ** (this.strikes - 1)); // 2s→4s→…→封顶 60s
+      this.until = Date.now() + backoff;
+      if (!wasBlocked) {
+        logErr('风控熔断', `code ${code}，暂停联网 ${Math.round(backoff / 1000)}s`);
+        toast(`⚠️ 触发 B 站风控(code ${code})，已暂停联网 ${Math.round(backoff / 1000)} 秒以保护账号`);
+      }
+    },
+  };
+
   // 小并发 + 较短冷却：兼顾速度与风控。每个请求完成后冷却 DELAY 再释放并发位。
-  const API = { view: new Map(), tag: new Map(), card: new Map(), queue: [], active: 0, CONCURRENCY: 3, DELAY: 120 };
+  const API = { view: new Map(), tag: new Map(), card: new Map(), queue: [], active: 0, waiting: false, CONCURRENCY: 3, DELAY: 120 };
   function apiPump() {
+    // 熔断中：不派发新请求，等退避窗口结束再恢复（已入队任务保持排队，不丢）
+    if (riskGuard.blocked()) {
+      if (!API.waiting) {
+        API.waiting = true;
+        setTimeout(() => {
+          API.waiting = false;
+          apiPump();
+        }, riskGuard.remaining() + 50);
+      }
+      return;
+    }
     while (API.active < API.CONCURRENCY && API.queue.length) {
       const task = API.queue.shift();
       API.active++;
@@ -483,7 +665,9 @@
       timeout: 12000,
       onload: (r) => {
         try {
-          cb(JSON.parse(r.responseText));
+          const j = JSON.parse(r.responseText);
+          riskGuard.note(j && j.code); // 风控码喂给熔断器
+          cb(j);
         } catch (e) {
           cb(null);
         }
@@ -498,13 +682,10 @@
     apiEnqueue((done) => {
       gmGet('https://api.bilibili.com/x/web-interface/view?bvid=' + encodeURIComponent(bvid), (j) => {
         const d = j && j.code === 0 ? j.data : null;
-        API.view.set(bvid, d);
-        if (d && d.owner && d.owner.mid) {
-          bvUidCache.set(bvid, String(d.owner.mid)); // 会话内反查用
-          if (d.owner.name) {
-            CONFIG.uidNames[String(d.owner.mid)] = d.owner.name; // 持久化：面板按名展示
-            scheduleSave();
-          }
+        API.view.set(bvid, d); // d.owner.mid 即可反查 uid，无需另设缓存
+        if (d && d.owner && d.owner.mid && d.owner.name) {
+          CONFIG.uidNames[String(d.owner.mid)] = d.owner.name; // 持久化：面板按名展示
+          scheduleSave();
         }
         cb(d);
         done();
@@ -535,6 +716,11 @@
       });
     });
   }
+  // 从 view 缓存里同步取 uid（已请求过的 bvid 才有；否则返回空串）
+  function cachedUid(bvid) {
+    const d = bvid && API.view.get(bvid);
+    return d && d.owner && d.owner.mid ? String(d.owner.mid) : '';
+  }
 
   /* ===================== 4c. 网络拦截层（数据层过滤，主路径） ===================== */
   // hook fetch / XHR，被动过滤 B 站自身请求的 JSON 列表：把命中本地规则的项从数组删掉，
@@ -550,11 +736,13 @@
     // 广告项标题/落地页常埋在 ad_info / cm 里，尽量抠出来，便于在屏蔽记录里辨识
     const ad = it.ad_info || it.cm_info || it.cm || null;
     const adC = (ad && (ad.creative_content || ad.creative)) || {};
+    // 搜索结果的 title 内含 <em class="keyword"> 高亮标签，去标签后再匹配（其它接口无标签，无副作用）
+    const rawTitle = it.title || adC.title || adC.description || ad?.title || '';
     return {
-      title: it.title || adC.title || adC.description || ad?.title || '',
+      title: rawTitle.replace(/<[^>]*>/g, ''),
       up: owner.name || it.author || it.name || (ad && ad.source_content && ad.source_content.name) || '',
       uid: owner.mid != null ? String(owner.mid) : it.mid != null ? String(it.mid) : '',
-      partition: it.tname || (it.rcmd_reason && it.rcmd_reason.content) || '',
+      partition: it.tname || it.typename || (it.rcmd_reason && it.rcmd_reason.content) || '',
       bvid: it.bvid || '',
       link: it.uri || it.jump_url || adC.url || adC.jump_url || '',
       duration: typeof it.duration === 'number' ? it.duration : it.duration ? parseDuration(it.duration) : null,
@@ -571,17 +759,30 @@
     { re: /\/x\/web-interface\/ranking\/v2/, get: (d) => (d && Array.isArray(d.list) ? d.list : null) },
     { re: /\/x\/web-interface\/popular(\/|\?|$)/, get: (d) => (d && Array.isArray(d.list) ? d.list : null) },
     { re: /\/x\/web-interface\/archive\/related/, get: (d) => (Array.isArray(d) ? d : null) },
+    // 搜索页：type=视频 时 data.result 直接是视频数组；综合(all/v2) 时 data.result 是分组，取 result_type==='video' 的 data
+    {
+      re: /\/x\/web-interface\/wbi\/search\/(type|all\/v2)/,
+      get: (d) => {
+        if (!d || !Array.isArray(d.result)) return null;
+        if (d.result.length && d.result[0] && d.result[0].result_type) {
+          const g = d.result.find((x) => x.result_type === 'video');
+          return g && Array.isArray(g.data) ? g.data : null;
+        }
+        return d.result;
+      },
+    },
   ];
   const isFeedUrl = (url) => !!url && FEED_HOOKS.some((h) => h.re.test(url));
 
-  // 就地过滤一个已解析的 JSON 响应，返回同一对象（数组被原地 splice）
+  // 就地过滤一个已解析的 JSON 响应：命中项从 json.data 的数组里原地 splice 删除。
+  // 返回删除条数（0 表示未改动），调用方据此决定是否需要重建响应/重序列化。
   function filterFeedJson(url, json) {
     // 审查模式下不在数据层删项，让视频照常渲染，交给 DOM 层标记，便于核对
-    if (!CONFIG.enabled || CONFIG.reviewMode || !json || json.code !== 0 || !json.data) return json;
+    if (!CONFIG.enabled || CONFIG.reviewMode || !json || json.code !== 0 || !json.data) return 0;
     const hook = FEED_HOOKS.find((h) => h.re.test(url));
-    if (!hook) return json;
+    if (!hook) return 0;
     const arr = hook.get(json.data);
-    if (!arr || !arr.length) return json;
+    if (!arr || !arr.length) return 0;
     let removed = 0;
     for (let i = arr.length - 1; i >= 0; i--) {
       const info = normFeedItem(arr[i]);
@@ -593,14 +794,56 @@
         removed++;
       }
     }
-    if (removed && CONFIG.debug) {
-      console.log(`%c[hoyoFairy]%c 拦截层 删除 ${removed} 项 @ ${url.split('?')[0]}`, BADGE, 'color:#e67e22');
-    }
-    return json;
+    if (removed) log(`拦截层 删除 ${removed} 项 @ ${url.split('?')[0]}`);
+    return removed;
   }
+  // ===== 可插拔网络管线（借鉴 cleaner FetchHook，但以「JSON 原地过滤」为中心，fetch 与 XHR 共用一套）=====
+  // preFn:  (url:string) => newUrl|void   —— 渲染前改写请求 URL（仅处理字符串 URL）
+  // postFn: (url, json)  => removedCount  —— 原地修改解析后的 JSON，返回删除条数
+  const NET = (() => {
+    const preFns = [];
+    const postFns = [];
+    return {
+      addPre: (fn) => preFns.push(fn),
+      addPost: (fn) => postFns.push(fn),
+      hasPre: () => preFns.length > 0,
+      rewriteUrl(url) {
+        let u = url;
+        for (const fn of preFns) {
+          try {
+            const r = fn(u);
+            if (typeof r === 'string' && r) u = r;
+          } catch (e) {}
+        }
+        return u;
+      },
+      runJson(url, json) {
+        let removed = 0;
+        for (const fn of postFns) {
+          try {
+            removed += fn(url, json) || 0;
+          } catch (e) {}
+        }
+        return removed;
+      },
+    };
+  })();
+
+  // 注册唯一的内容过滤 postFn（即原 filterFeedJson）；以后新增过滤器只需再 addPost 一条。
+  NET.addPost(filterFeedJson);
+  // 注册「增大首页推荐请求数」preFn（默认关，opt-in）：拦截层会删项，调大 ps 可让信息流删后仍饱满。
+  NET.addPre((url) => {
+    if (!CONFIG.boostFeedLoad) return;
+    if (/\/x\/web-interface\/(wbi\/)?index\/top\/feed\/rcmd/.test(url) && /[?&]ps=\d+/.test(url)) {
+      return url.replace(/([?&]ps=)\d+/, '$1' + 30);
+    }
+  });
+
+  // 过滤文本响应：无删项时原样返回 raw（省一次序列化、且保持字节一致）
   function computeFilteredText(url, raw) {
     try {
-      return JSON.stringify(filterFeedJson(url, JSON.parse(raw)));
+      const json = JSON.parse(raw);
+      return NET.runJson(url, json) ? JSON.stringify(json) : raw;
     } catch (e) {
       return raw;
     }
@@ -614,19 +857,24 @@
     if (typeof W.fetch === 'function' && !W.fetch.__bfb) {
       const origFetch = W.fetch;
       const wrapped = function (input, init) {
-        const url = typeof input === 'string' ? input : (input && input.url) || '';
-        const p = origFetch.apply(this, arguments);
+        // 请求改写（preFn）：仅当输入是字符串 URL 时处理，避免重建 Request 对象的副作用
+        let input2 = input;
+        if (NET.hasPre() && typeof input === 'string') input2 = NET.rewriteUrl(input);
+        const url = typeof input2 === 'string' ? input2 : (input2 && input2.url) || '';
+        const p = origFetch.call(this, input2, init);
         if (!isFeedUrl(url)) return p;
         return p.then((resp) =>
           resp
             .clone()
             .json()
             .then((json) => {
-              // 重建响应：剔除 content-encoding/length（正文已是明文 JSON，旧头会误导消费者）
+              // 无命中删项：原样返回真实响应，保留 url/type/redirected 等元信息，且不重序列化
+              if (!NET.runJson(url, json)) return resp;
+              // 有删项才重建响应：剔除 content-encoding/length（正文已是明文 JSON，旧头会误导消费者）
               const h = new Headers(resp.headers);
               h.delete('content-encoding');
               h.delete('content-length');
-              return new RespCtor(JSON.stringify(filterFeedJson(url, json)), { status: resp.status, statusText: resp.statusText, headers: h });
+              return new RespCtor(JSON.stringify(json), { status: resp.status, statusText: resp.statusText, headers: h });
             })
             .catch(() => resp)
         );
@@ -646,14 +894,21 @@
       const dResp = Object.getOwnPropertyDescriptor(XHR.prototype, 'response');
       XHR.prototype.open = function (method, url) {
         const self = this;
-        if (isFeedUrl(url)) {
+        // 请求改写（preFn）：仅处理字符串 URL
+        const url2 = NET.hasPre() && typeof url === 'string' ? NET.rewriteUrl(url) : url;
+        if (isFeedUrl(url2)) {
+          // 同一次响应只过滤一次：responseText 与 response(text 型) 共用这份文本 memo，
+          // 避免消费者同时读两者时过滤跑两遍、导致计数与屏蔽记录翻倍。
+          const filteredText = (getRaw) => {
+            if (self.__bfbText === undefined) self.__bfbText = computeFilteredText(url2, getRaw());
+            return self.__bfbText;
+          };
           if (dText && dText.get) {
             Object.defineProperty(self, 'responseText', {
               configurable: true,
               get() {
                 if (self.readyState !== 4) return dText.get.call(self);
-                if (self.__bfbText === undefined) self.__bfbText = computeFilteredText(url, dText.get.call(self));
-                return self.__bfbText;
+                return filteredText(() => dText.get.call(self));
               },
             });
           }
@@ -662,26 +917,54 @@
               configurable: true,
               get() {
                 if (self.readyState !== 4) return dResp.get.call(self);
-                if (self.__bfbResp === undefined) {
-                  const rt = self.responseType;
-                  const orig = dResp.get.call(self);
-                  try {
-                    if (rt === 'json' && orig && typeof orig === 'object') self.__bfbResp = filterFeedJson(url, orig);
-                    else if ((rt === '' || rt === 'text') && typeof orig === 'string') self.__bfbResp = computeFilteredText(url, orig);
-                    else self.__bfbResp = orig;
-                  } catch (e) {
-                    self.__bfbResp = orig;
+                const rt = self.responseType;
+                // json 型只能读 .response（读 responseText 会抛错），单独 memo 一份对象
+                if (rt === 'json') {
+                  if (self.__bfbResp === undefined) {
+                    const orig = dResp.get.call(self);
+                    try {
+                      if (orig && typeof orig === 'object') NET.runJson(url2, orig); // 原地删项
+                      self.__bfbResp = orig;
+                    } catch (e) {
+                      self.__bfbResp = orig;
+                    }
                   }
+                  return self.__bfbResp;
                 }
-                return self.__bfbResp;
+                // text/'' 型：与 responseText 共用同一份文本 memo
+                if (rt === '' || rt === 'text') {
+                  const orig = dResp.get.call(self);
+                  return typeof orig === 'string' ? filteredText(() => orig) : orig;
+                }
+                return dResp.get.call(self);
               },
             });
           }
         }
-        return origOpen.apply(this, arguments);
+        // 用改写后的 url2 调原始 open（保留 async/user/password 透传）
+        return origOpen.call(this, method, url2, arguments.length > 2 ? arguments[2] : true, arguments[3], arguments[4]);
       };
       XHR.prototype.__bfb = true;
     }
+  }
+
+  // hook Element.prototype.attachShadow：把页面创建的每个开放 shadowRoot 收进注册表（评论组件定位、卡片穿透共用）。
+  // 必须在 document-start 安装，先于 B 站构建评论 Web Component。借鉴 bilibili-cleaner Shadow.hook。
+  function installShadowHook() {
+    if (Element.prototype.attachShadow.__bfb) return;
+    const orig = Element.prototype.attachShadow;
+    const wrapped = function (init) {
+      const root = orig.call(this, init);
+      try {
+        shadowRoots.add(root);
+        if (CMT_TAGS[this.tagName] !== undefined) scheduleCommentScan();
+      } catch (e) {}
+      return root;
+    };
+    wrapped.__bfb = true;
+    try {
+      Element.prototype.attachShadow = wrapped;
+    } catch (e) {}
   }
 
   /* ===================== 5. 拦截执行 ===================== */
@@ -716,7 +999,7 @@
     card.classList.remove('bfb-review');
     const t = card.querySelector(':scope > .bfb-tag');
     if (t) t.remove();
-    card.removeAttribute('data-bfb-blocked');
+    card.removeAttribute(ATTR_BLOCKED);
     const cell = cellOf(card);
     if (cell !== card) cell.style.display = '';
   }
@@ -757,14 +1040,7 @@
     if (document.body) updateBadge(); // document-start 时 body 可能还没就绪
     if (panelStatsRefresh && isPanelOpen()) panelStatsRefresh();
     scheduleSave();
-    if (CONFIG.debug) {
-      console.log(
-        `%c[hoyoFairy]%c 拦截🚫 ${reason}%c ${info && info.up ? info.up + ' · ' : ''}${(info && info.title) || '(无标题)'}`,
-        BADGE,
-        'color:#e74c3c',
-        'color:inherit'
-      );
-    }
+    log(`拦截🚫 ${reason} ${info && info.up ? info.up + ' · ' : ''}${(info && info.title) || '(无标题)'}`);
   }
 
   // DOM 兜底层：审查模式标记、否则直接隐藏漏网卡。主路径由网络拦截层在渲染前就删除。
@@ -776,39 +1052,34 @@
       if (!isUnsafeHideTarget(cell)) cell.style.display = 'none';
       card.style.display = 'none';
     }
-    card.setAttribute('data-bfb-blocked', '1'); // 供「批量拉黑」扫描
+    card.setAttribute(ATTR_BLOCKED, '1'); // 供「批量拉黑」扫描
     if (countedEls.has(card)) return;
     countedEls.add(card);
     recordBlock(reason, info, 'DOM');
   }
 
-  function processCard(card) {
+  // 单卡处理用错误边界包裹：异形卡导致 extractCardInfo/matchRule 抛错时，只跳过这一张、不中断整轮扫描
+  const processCard = safe('processCard', function (card) {
     if (!CONFIG.enabled) return;
     if (card.getAttribute(PROCESSED)) return;
-    const info = extractCardInfo(card);
-    if (!info.title && !info.up) return; // 骨架卡，等填充后再处理
+    const info = extractCardInfo(card, M.needUid); // 无 UID 规则时跳过昂贵的 innerHTML 兜底
+    if (!info.title && !info.up && !info.isLive) return; // 骨架卡，等填充后再处理（直播卡常无标题，放行交给规则判定）
     card.setAttribute(PROCESSED, '1');
     card._bfbInfo = info;
     const hit = matchRule(info);
-    if (CONFIG.debug && !hit) {
-      console.log(
-        `%c[hoyoFairy]%c 放行✅ | 标题:${info.title || '(无)'} | UP:${info.up || '(无)'} | 标签:${info.partition || '(无)'}`,
-        BADGE,
-        'color:#27ae60'
-      );
-    }
+    if (!hit) log(`放行✅ | 标题:${info.title || '(无)'} | UP:${info.up || '(无)'} | 标签:${info.partition || '(无)'}`);
     if (hit) {
       blockVideo(card, hit, info);
       return;
     }
     // 过了本地规则、未命中白名单、且开了精确过滤 → 按需取数再判（限速、缓存）
     if (info.bvid && apiRulesActive()) evaluateApi(card, info);
-  }
+  });
 
   // 异步评估：只取需要的接口，命中则隐藏/标记（与本地规则同一套出口 blockVideo）
   function evaluateApi(card, info) {
-    if (card.getAttribute('data-bfb-api')) return;
-    card.setAttribute('data-bfb-api', '1');
+    if (card.getAttribute(ATTR_API)) return;
+    card.setAttribute(ATTR_API, '1');
     const need = apiNeeds();
     let view = null;
     let tags = null;
@@ -818,11 +1089,8 @@
       if (pending > 0) return;
       if (!CONFIG.enabled || isWhitelisted(info)) return;
       const hit = matchApi(info, view, tags, cardData);
-      if (hit) {
-        blockVideo(card, hit, info);
-      } else if (CONFIG.debug) {
-        console.log(`%c[hoyoFairy]%c API放行 | ${info.title || ''}`, BADGE, 'color:#27ae60');
-      }
+      if (hit) blockVideo(card, hit, info);
+      else log(`API放行 | ${info.title || ''}`);
     };
     const afterView = () => {
       // UP 卡片需要 mid：优先 DOM 抠的，没有就用 view.owner.mid
@@ -857,11 +1125,44 @@
     }
   }
 
+  // 已知的开放 Shadow Root 注册表：部分卡片可能渲染在 shadow DOM 内，普通 querySelectorAll 选不中。
+  // 启动时全量采集一次，之后只在 MutationObserver 的新增节点子树里增量采集，避免每次扫描全量遍历（借鉴 codertesla queryAllDeep）。
+  const shadowRoots = new Set();
+  function harvestShadowRoots(root) {
+    if (!root || !root.querySelectorAll) return;
+    let nodes;
+    try {
+      nodes = root.querySelectorAll('*');
+    } catch (e) {
+      return;
+    }
+    for (const el of nodes) {
+      if (el.shadowRoot && el.id !== 'bfb-overlay-host' && !shadowRoots.has(el.shadowRoot)) {
+        shadowRoots.add(el.shadowRoot);
+      }
+    }
+  }
+  // 普通 DOM 卡片 ∪ 各存活 shadow root 内的卡片
+  function queryCards() {
+    const out = Array.from(document.querySelectorAll(VIDEO_CARD_SELECTOR));
+    for (const r of shadowRoots) {
+      if (!r.host || !r.host.isConnected) {
+        shadowRoots.delete(r);
+        continue;
+      }
+      try {
+        const found = r.querySelectorAll(VIDEO_CARD_SELECTOR);
+        if (found.length) out.push(...found);
+      } catch (e) {}
+    }
+    return out;
+  }
+
   function scanAll() {
     if (!CONFIG.enabled) return;
-    document.querySelectorAll(VIDEO_CARD_SELECTOR).forEach((card) => {
+    queryCards().forEach((card) => {
       if (card.getAttribute(PROCESSED)) return;
-      if (card.closest('.recommended-swipe')) return; // 顶部轮播 banner，跳过
+      if (card.closest && card.closest('.recommended-swipe')) return; // 顶部轮播 banner，跳过
       processCard(card);
     });
   }
@@ -870,10 +1171,154 @@
     rebuildRules();
     document.querySelectorAll('[' + PROCESSED + ']').forEach((el) => {
       el.removeAttribute(PROCESSED);
-      el.removeAttribute('data-bfb-api');
+      el.removeAttribute(ATTR_API);
       clearVisual(el);
     });
     scanAll();
+    scanComments(); // ruleVersion 已自增，评论会按新规则重判
+  }
+
+  /* ===================== 5c. 评论区过滤（读评论组件 __data，DOM 层隐藏） ===================== */
+  // B 站新版评论是 Web Component（bili-comment-thread-renderer=一级 / bili-comment-reply-renderer=二级），
+  // 数据挂在宿主元素的 .__data 上。我们靠 attachShadow 钩子把这些组件的 shadowRoot 收进 shadowRoots，
+  // 再读 __data 判定、隐藏。全部字段访问走可选链，缺字段=不命中，绝不抛错。
+  const CMT_TAGS = { 'BILI-COMMENT-THREAD-RENDERER': false, 'BILI-COMMENT-REPLY-RENDERER': true };
+
+  // 归一评论正文：去掉开头"回复 @x:"、去 @提及、去 [表情] 占位，便于关键词/空洞判定
+  function cmtCleanMsg(msg, isSub) {
+    let s = (msg || '').toString();
+    if (isSub) s = s.replace(/^回复\s?@[^@\s:：]+\s?[:：]/, '');
+    return s.replace(/@[^@\s]+/g, ' ').replace(/(\[[^[\]]+\])+/g, ' ').trim();
+  }
+  // 去表情后是否为空（纯表情/纯 @）
+  const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u200d\u{20E3}]/gu;
+
+  function readCmt(host) {
+    const d = (host && host.__data) || {};
+    const member = d.member || {};
+    const content = d.content || {};
+    const lv = member.level_info && member.level_info.current_level;
+    const vipStatus = member.vip && member.vip.vipStatus;
+    return {
+      uname: ((member.uname || '') + '').trim(),
+      mid: d.mid,
+      level: typeof lv === 'number' ? lv : null,
+      noface: (member.avatar || '').endsWith('noface.jpg') && (vipStatus === 0 || vipStatus == null),
+      message: (content.message || '') + '',
+      members: Array.isArray(content.members) ? content.members : [],
+      isUpTop: !!(d.reply_control && d.reply_control.is_up_top),
+      upMid: host.__upMid, // B 站组件挂的视频 UP mid（可能缺，缺则 isUp 白名单不生效）
+      me: host.__user && host.__user.uname, // 当前登录用户名（可能缺）
+    };
+  }
+
+  // 返回命中原因或 null。白名单优先（UP/置顶/自己）。
+  function matchComment(c, isSub) {
+    const cc = CONFIG.comment;
+    // —— 白名单 ——
+    if (cc.allowUp && c.upMid != null && c.mid != null && String(c.mid) === String(c.upMid)) return null;
+    if (cc.allowPin && !isSub && c.isUpTop) return null;
+    if (cc.allowMe && c.me && (c.uname === c.me || c.message.includes('@' + c.me))) return null;
+    // —— 黑名单 ——
+    if (c.uname && M.cmtUserSet.has(lc(c.uname))) return '评论用户:' + c.uname;
+    if (c.uname && textHit(c.uname, M.cmtUserKw)) return '评论昵称词';
+    const clean = cmtCleanMsg(c.message, isSub);
+    if (textHit(clean, M.cmtKw)) return '评论关键词';
+    if (cc.minLevel > 0 && c.level != null && c.level < cc.minLevel) return `评论等级<${cc.minLevel}`;
+    if (cc.hideNoFace && c.noface) return '默认头像非会员';
+    if (cc.hideBot && c.uname && COMMENT_BOTS.has(c.uname)) return 'AI机器人';
+    if (cc.hideCallBot && c.members.some((m) => m && COMMENT_BOTS.has(m.uname))) return '召唤AI';
+    if (cc.hideAd && COMMENT_AD_RE.test(c.message)) return '带货评论';
+    if (cc.hideCallOnly && c.message.replace(/@[^@\s]+/g, ' ').trim() === '') return '纯@评论';
+    if (cc.hideEmojiOnly && clean.replace(EMOJI_RE, '').trim() === '') return '纯表情评论';
+    return null;
+  }
+
+  // 处理单条评论宿主（错误边界 + 版本号去重）
+  const processComment = safe('processComment', function (host, isSub) {
+    if (host.__bfbCmtV === ruleVersion) return; // 本版本已评估过
+    host.__bfbCmtV = ruleVersion;
+    const c = readCmt(host);
+    if (!c.uname && !c.message) return; // 还没渲染出数据，等下一轮
+    const reason = matchComment(c, isSub);
+    if (reason) {
+      if (CONFIG.reviewMode) {
+        host.style.setProperty('outline', '2px solid #fb7299', 'important');
+        host.title = '[hoyoFairy] 命中：' + reason;
+        host.style.removeProperty('display');
+      } else {
+        // 评论组件常带 :host{display:..!important}，必须用 important 内联才能压过
+        host.style.setProperty('display', 'none', 'important');
+      }
+      if (!host.__bfbCmtHit) {
+        host.__bfbCmtHit = true;
+        recordBlock(reason, { up: c.uname, title: cmtCleanMsg(c.message, isSub).slice(0, 40) }, 'CMT');
+      }
+    } else {
+      // 不命中：撤销之前可能的隐藏/标记（规则放宽后恢复）
+      host.style.removeProperty('display');
+      host.style.removeProperty('outline');
+      host.removeAttribute('title');
+      host.__bfbCmtHit = false;
+    }
+  });
+
+  // 还原所有被评论过滤隐藏/标记的评论（关闭过滤时调用）
+  function revertComments() {
+    for (const root of shadowRoots) {
+      const host = root && root.host;
+      if (!host || CMT_TAGS[host.tagName] === undefined) continue;
+      if (host.__bfbCmtHit || host.style.display === 'none' || host.style.outline) {
+        host.style.removeProperty('display');
+        host.style.removeProperty('outline');
+        host.removeAttribute('title');
+        host.__bfbCmtHit = false;
+        host.__bfbCmtV = undefined;
+      }
+    }
+  }
+  let lastCmtDiag = '';
+  function scanComments() {
+    if (!CONFIG.enabled || !CONFIG.comment.enabled) {
+      revertComments(); // 关闭时恢复曾隐藏的评论
+      return;
+    }
+    let cmtHosts = 0;
+    for (const root of shadowRoots) {
+      const host = root && root.host;
+      if (!host) continue;
+      if (!host.isConnected) {
+        shadowRoots.delete(root);
+        continue;
+      }
+      const isSub = CMT_TAGS[host.tagName];
+      if (isSub === undefined) continue;
+      cmtHosts++;
+      processComment(host, isSub);
+    }
+    // 诊断：调试模式下，输出当前捕获到的全部 shadow 宿主标签 + 评论宿主数（标签集变化才打，避免刷屏）
+    if (CONFIG.debug) {
+      const tags = {};
+      for (const r of shadowRoots) {
+        const h = r && r.host;
+        if (h && h.tagName) tags[h.tagName] = (tags[h.tagName] || 0) + 1;
+      }
+      const sig = JSON.stringify(tags);
+      if (sig !== lastCmtDiag) {
+        lastCmtDiag = sig;
+        log(`评论诊断｜shadowRoot 总数=${shadowRoots.size}｜评论宿主=${cmtHosts}｜各标签计数=`, tags);
+      }
+    }
+  }
+  // 评论增量很碎（每条评论各自 attachShadow），用节流聚合扫描
+  let cmtTimer = null;
+  function scheduleCommentScan() {
+    if (!CONFIG.comment.enabled) return;
+    if (cmtTimer) return;
+    cmtTimer = setTimeout(() => {
+      cmtTimer = null;
+      scanComments();
+    }, 300);
   }
 
   function addToList(arr, value) {
@@ -898,16 +1343,20 @@
   // 用 BV 号反查 UP 的 uid/name（页面取不到 UID 时的兜底，走视频详情接口）
   // 复用接口层的 view 缓存与限速队列。
   function resolveUidByBvid(bvid, cb) {
-    const cached = bvid && bvUidCache.get(bvid);
-    if (cached) {
-      cb(String(cached), CONFIG.uidNames[String(cached)] || '');
-      return;
-    }
+    // fetchView 自带缓存：命中即同步回调，无需在此另设缓存分支
     fetchView(bvid, (d) => {
       if (d && d.owner) cb(String(d.owner.mid), d.owner.name || '');
       else cb('', '');
     });
   }
+
+  // relation/modify 常见错误码 → 友好文案（借鉴 codertesla bilibili-1-click-blocker）
+  const REL_ERR = {
+    '-101': '未登录或登录已过期',
+    '-111': 'CSRF 校验失败，请刷新页面重试',
+    '-352': '触发 B 站风控，请稍后再试',
+    22120: '该用户已在你的黑名单中',
+  };
 
   // 真正调接口拉黑（已确定 uid）。quiet=true 时不弹单条提示（批量/联合投稿场景由调用方汇总）。
   function doBlacklist(uid, upName, cb, quiet) {
@@ -927,15 +1376,26 @@
       method: 'POST',
       url: 'https://api.bilibili.com/x/relation/modify',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      data: `fid=${encodeURIComponent(uid)}&act=5&re_src=11&csrf=${encodeURIComponent(csrf)}`,
+      // gaia_source=web_main 贴合当前官方 web 端行为，降低被风控/失败概率（借鉴 codertesla）
+      data: `fid=${encodeURIComponent(uid)}&act=5&re_src=11&gaia_source=web_main&csrf=${encodeURIComponent(csrf)}`,
       withCredentials: true,
       onload: (res) => {
-        let ok = false;
+        let code = null;
+        let msg = '';
         try {
-          ok = JSON.parse(res.responseText).code === 0;
+          const j = JSON.parse(res.responseText);
+          code = j.code;
+          msg = j.message || '';
         } catch (e) {}
+        riskGuard.note(code); // 拉黑响应也喂给熔断器（批量拉黑触发风控时全局退避）
         addLocal();
-        if (!quiet) toast(ok ? `已拉黑并同步账号黑名单：${label}（刷新后不再推荐）` : `账号侧拉黑失败，已本地屏蔽：${label}`);
+        // 22120 = 已在黑名单，视作成功（幂等）
+        const ok = code === 0 || code === 22120;
+        if (!quiet) {
+          if (code === 0) toast(`已拉黑并同步账号黑名单：${label}（刷新后不再推荐）`);
+          else if (code === 22120) toast(`「${label}」此前已在账号黑名单，已本地同步`);
+          else toast(`账号侧拉黑失败（${REL_ERR[code] || msg || 'code ' + code}），已本地屏蔽：${label}`);
+        }
         cb && cb(ok);
       },
       onerror: () => {
@@ -962,6 +1422,11 @@
     const next = () => {
       if (i >= list.length) {
         cb && cb(ok, list.length);
+        return;
+      }
+      // 熔断中：等退避窗口结束再继续，避免越拉越严
+      if (riskGuard.blocked()) {
+        setTimeout(next, riskGuard.remaining() + 50);
         return;
       }
       const t = list[i++];
@@ -1050,9 +1515,48 @@
   }
   function onContextMenu(e) {
     if (!CONFIG.enabled || !CONFIG.rightClickBlock) return;
+
+    // 评论区右键（优先于视频卡）：在评论上右键 → 屏蔽该评论用户 / 选中文本加评论关键词
+    if (CONFIG.comment.enabled) {
+      const cmtHost = findCommentHost(e);
+      if (cmtHost) {
+        const c = readCmt(cmtHost);
+        const citems = [];
+        const csel = (window.getSelection && window.getSelection().toString().trim()) || '';
+        if (csel && csel.length <= 30) {
+          citems.push({
+            label: `🚫 评论含「${csel}」关键词`,
+            act: () => {
+              addToList(CONFIG.comment.keywords, csel);
+              toast(`已加入评论关键词：${csel}`);
+              refreshPanelIfOpen();
+            },
+          });
+        }
+        if (c.uname) {
+          citems.push({
+            label: `🚫 屏蔽评论用户「${c.uname}」`,
+            act: () => {
+              addToList(CONFIG.comment.userNames, c.uname);
+              toast(`已屏蔽评论用户：${c.uname}`);
+              refreshPanelIfOpen();
+            },
+          });
+        }
+        if (citems.length) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeCtxMenu();
+          renderCtxMenu(e, citems);
+          return;
+        }
+      }
+    }
+
     const card = e.target.closest(VIDEO_CARD_SELECTOR);
     if (!card) return;
-    const info = card._bfbInfo || extractCardInfo(card);
+    // 右键为低频用户操作：强制深度提取，确保拿到权威 UID（扫描期缓存可能未解析 UID）
+    const info = extractCardInfo(card, true);
     if (!info.up && !info.bvid) return;
 
     e.preventDefault();
@@ -1113,6 +1617,11 @@
     });
     items.push({ label: '⚙️ 打开设置面板', act: openPanel });
 
+    renderCtxMenu(e, items);
+  }
+
+  // 在鼠标处弹出自定义菜单（视频卡 / 评论 共用）
+  function renderCtxMenu(e, items) {
     const menu = document.createElement('div');
     menu.id = 'bfb-ctxmenu';
     items.forEach((it) => {
@@ -1130,8 +1639,86 @@
     menu.style.top = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10) + 'px';
     ctxMenuEl = menu;
   }
+
+  // 评论在 shadow DOM 内，contextmenu 的 target 会重定向到宿主；用 composedPath 在路径上找评论组件宿主
+  function findCommentHost(e) {
+    const path = (e.composedPath && e.composedPath()) || [];
+    for (const el of path) {
+      if (el && el.tagName && CMT_TAGS[el.tagName] !== undefined) return el;
+    }
+    return null;
+  }
   document.addEventListener('click', closeCtxMenu, true);
   document.addEventListener('scroll', closeCtxMenu, true);
+
+  /* —— 悬停快捷拉黑按钮（独立 fixed 浮层，不改 B 站卡片 DOM，规避框架重渲染冲掉） —— */
+  // 浮层根：独立 Shadow DOM。host 自身 pointer-events:none + contain，既抗 B 站框架重渲染冲掉，
+  // 又让页面 CSS 与我们的样式互不污染（借鉴 codertesla bilibili-1-click-blocker）。
+  let overlayHost = null;
+  let overlayRoot = null;
+  function getOverlayRoot() {
+    if (overlayRoot) return overlayRoot;
+    overlayHost = document.createElement('div');
+    overlayHost.id = 'bfb-overlay-host';
+    overlayHost.style.cssText = 'position:fixed;inset:0;z-index:100002;pointer-events:none;contain:layout style';
+    overlayRoot = overlayHost.attachShadow({ mode: 'open' });
+    const st = document.createElement('style');
+    st.textContent =
+      '.blk{position:fixed;pointer-events:auto;background:rgba(251,114,153,.95);color:#fff;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.28);font-family:system-ui,Arial;user-select:none;display:none}' +
+      '.blk:hover{background:#fb7299}';
+    overlayRoot.appendChild(st);
+    (document.documentElement || document.body).appendChild(overlayHost);
+    return overlayRoot;
+  }
+
+  let hoverBtn = null;
+  let hoverCard = null;
+  function ensureHoverBtn() {
+    if (hoverBtn) return hoverBtn;
+    const root = getOverlayRoot();
+    hoverBtn = document.createElement('div');
+    hoverBtn.className = 'blk';
+    hoverBtn.textContent = '⛔ 拉黑';
+    hoverBtn.title = '拉黑该 UP（同步账号黑名单）';
+    hoverBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!hoverCard) return;
+      const info = hoverCard._bfbInfo || extractCardInfo(hoverCard);
+      if (!info.up && !info.bvid) {
+        toast('该卡片信息不足，无法拉黑');
+        return;
+      }
+      blacklistUp(info, refreshPanelIfOpen, hoverCard);
+      hideHoverBtn();
+    };
+    root.appendChild(hoverBtn);
+    return hoverBtn;
+  }
+  function hideHoverBtn() {
+    if (hoverBtn) hoverBtn.style.display = 'none';
+    hoverCard = null;
+  }
+  function positionHoverBtn(card) {
+    const r = card.getBoundingClientRect();
+    if (r.width < 80 || r.height < 60) return hideHoverBtn(); // 太小的卡（如纯文本/骨架）不显示
+    const b = ensureHoverBtn();
+    b.style.left = Math.max(8, r.left + 8) + 'px';
+    b.style.top = Math.max(8, r.top + 8) + 'px';
+    b.style.display = 'block';
+    hoverCard = card;
+  }
+  function onCardHover(e) {
+    if (!CONFIG.enabled || !CONFIG.cardHoverBtn) return;
+    const t = e.target;
+    if (t === overlayHost) return; // 事件从 Shadow 浮层冒泡时 target 会重定向为 host，保持显示
+    const card = t.closest && t.closest(VIDEO_CARD_SELECTOR);
+    if (card) {
+      if (card !== hoverCard) positionHoverBtn(card);
+    } else {
+      hideHoverBtn();
+    }
+  }
 
   /* ===================== 8. UI 面板 ===================== */
   GM_addStyle(`
@@ -1216,9 +1803,8 @@
     #bfb-panel .field .chips::-webkit-scrollbar-thumb:hover{background:#fb7299}
     #bfb-panel .chip.uidchip::before{content:"账号";font-size:9px;background:#6b4dff;color:#fff;border-radius:5px;padding:0 4px;margin-right:2px}
     #bfb-panel .chip.group{background:#ede9fe;color:#5b21b6;border-color:#ddd6fe}
-    #bfb-panel .sec.allow .chip.group{background:#eafaef}
     /* —— 分组 Tab —— */
-    #bfb-panel .tabs{position:sticky;top:48px;z-index:2;display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;background:#fff;border-bottom:1px solid #f0f0f0;overscroll-behavior:contain}
+    #bfb-panel .tabs{position:sticky;top:48px;z-index:2;display:flex;flex-wrap:wrap;justify-content:center;gap:6px;padding:10px 12px;background:#fff;border-bottom:1px solid #f0f0f0;overscroll-behavior:contain}
     #bfb-panel .tab{flex:0 0 auto;padding:6px 13px;border-radius:16px;background:#f3f3f3;color:#666;font-size:13px;cursor:pointer;border:none;white-space:nowrap;font-weight:600;transition:.15s}
     #bfb-panel .tab:hover{background:#ffe3ec;color:#fb7299}
     #bfb-panel .tab.active{background:linear-gradient(135deg,#fb7299,#ff9bb6);color:#fff;box-shadow:0 2px 8px rgba(251,114,153,.35)}
@@ -1557,15 +2143,17 @@
     ['base', '⚙ 基础', '常规开关与卡片类型过滤'],
     ['black', '🚫 黑名单', '按标题 / UP主 / 分区屏蔽，即时生效。规则用 /.../ 包裹表示正则（如 /震惊.*竟然/），否则按关键词包含匹配（不分大小写）'],
     ['api', '🛰 进阶', '播放量、时长，以及标签 / 数据等更细致的过滤（标签类需开启下方的「精确过滤」）'],
+    ['comment', '💬 评论', '过滤视频/动态评论区的引战、水军、营销与 AI 评论（读评论数据隐藏，仅在有评论的页面生效；与视频规则相互独立）'],
     ['allow', '⭐ 白名单', '命中白名单的内容永不隐藏，优先级最高'],
     ['tools', '🧰 工具', '预置库 / 重置 / 屏蔽记录'],
   ];
 
   // 列表型字段描述表：黑名单 / 进阶标签 / 白名单。新增一类过滤只需在此加一行。
   const BLACK_FIELDS = [
-    { key: 'keywords', label: '🎯 关键词', placeholder: '如：原神 或 /震惊.*竟然/', hint: '一次命中 标题 / UP主名 / 分区（开「精确过滤」后还会匹配视频标签）。普通词=包含即拦；/.../ 包裹=正则，如 /一口气.*看完/。' },
+    { key: 'keywords', label: '🎯 关键词', placeholder: '如：原神 或 /震惊.*竟然/', hint: '默认一次命中 标题 / UP主名 / 分区（开「精确过滤」后还会匹配视频标签）。普通词=包含即拦；/.../ 包裹=正则，如 /一口气.*看完/。可加作用域前缀只匹配某字段：title:词 / up:词 / part:词（如 up:营销号 只按 UP 名拦）。' },
     { kind: 'up', label: 'UP 主', hint: '输入 UP 名 或 UID（纯数字自动识别为 UID）；可一次粘贴多条，用逗号或换行分隔。' },
     { key: 'bvids', label: 'BV 号', placeholder: '如：BV1xx411c7XX', hint: '按视频 BV 号精确屏蔽单个视频。' },
+    { key: 'partitions', label: '视频分区', placeholder: '如：资讯 或 /综艺|娱乐/', hint: '按视频分区(tname)屏蔽，网络拦截层最准。普通词=包含即拦；/.../ 包裹=正则。' },
   ];
   const API_CHIP_FIELDS = [
     { key: 'tags', label: '视频标签', placeholder: '如：原神 或 /鬼畜|二创/', hint: '匹配视频的完整标签(tag)，需开启上方「精确过滤」。普通词=包含即拦；/.../ 包裹=正则。' },
@@ -1582,7 +2170,7 @@
     p.innerHTML = '';
     panelStatsRefresh = null;
     const h2 = document.createElement('h2');
-    h2.innerHTML = `🛡 hoyoFairy · 抗击黑潮 <small style="font-weight:normal;opacity:.6;font-size:12px">v${VERSION} · ${pageType()}</small> <span class="x">✕</span>`;
+    h2.innerHTML = `🛡 biliHoyoFairy · 抗击黑潮 <small style="font-weight:normal;opacity:.6;font-size:12px">v${VERSION} · ${pageType()}</small> <span class="x">✕</span>`;
     p.appendChild(h2);
     h2.querySelector('.x').onclick = closePanel;
 
@@ -1621,6 +2209,7 @@
       <div class="switch"><input type="checkbox" id="bfb-enabled"> 启用拦截</div>
       <div class="switch"><input type="checkbox" id="bfb-review"> 🔍 审查模式（不隐藏，标记被拦视频+就地放行，便于核对）</div>
       <div class="switch"><input type="checkbox" id="bfb-rclick"> 右键卡片弹菜单（屏蔽/拉黑/加白名单）</div>
+      <div class="switch"><input type="checkbox" id="bfb-hoverbtn"> 悬停卡片显示快捷「拉黑」按钮</div>
       <div class="switch"><input type="checkbox" id="bfb-collab"> 联合投稿一并拉黑合作者</div>
       <div class="switch"><input type="checkbox" id="bfb-debug"> 调试模式（控制台逐卡打印拦/放原因）</div>
       <div class="hint">所有开关与规则均<b>即时生效</b>，无需保存。<b>审查模式</b>切换后建议<b>刷新页面</b>以核对完整结果。真正“从推荐流消失”请用<b>拉黑</b>。</div>`;
@@ -1633,6 +2222,7 @@
     });
     bindControl(sw, 'bfb-review', CONFIG, 'reviewMode', { after: rescanAfterRuleChange });
     bindControl(sw, 'bfb-rclick', CONFIG, 'rightClickBlock');
+    bindControl(sw, 'bfb-hoverbtn', CONFIG, 'cardHoverBtn', { after: hideHoverBtn });
     bindControl(sw, 'bfb-collab', CONFIG, 'blacklistCollab');
     bindControl(sw, 'bfb-debug', CONFIG, 'debug', { after: rescanAfterRuleChange });
 
@@ -1641,10 +2231,12 @@
     ct.innerHTML = `
       <label>卡片类型过滤</label>
       <div class="switch"><input type="checkbox" id="bfb-ad"> 屏蔽广告/推广卡片</div>
+      <div class="switch"><input type="checkbox" id="bfb-live"> 屏蔽信息流里的直播推荐卡</div>
       <div class="switch"><input type="checkbox" id="bfb-hotsearch"> 屏蔽搜索框热搜词</div>
-      <div class="hint">广告为自动识别，偶有误差；可在下方「屏蔽记录」核对实际拦了什么。</div>`;
+      <div class="hint">广告为自动识别，偶有误差；可在下方「屏蔽记录」核对实际拦了什么。直播卡=首页/动态里链向直播间的推荐卡。</div>`;
     G.base.appendChild(ct);
     bindControl(ct, 'bfb-ad', CONFIG, 'hideAd', { after: rescanAfterRuleChange });
+    bindControl(ct, 'bfb-live', CONFIG, 'hideLiveCard', { after: rescanAfterRuleChange });
     bindControl(ct, 'bfb-hotsearch', CONFIG, 'hideHotSearch', { after: applyHotSearchStyle });
 
     renderFields(G.black, BLACK_FIELDS);
@@ -1660,6 +2252,14 @@
     bindControl(num, 'bfb-minviews', CONFIG.block, 'minViews', { number: true, after: rescanAfterRuleChange });
     bindControl(num, 'bfb-dmin', CONFIG.block, 'minDuration', { number: true, int: true, after: rescanAfterRuleChange });
     bindControl(num, 'bfb-dmax', CONFIG.block, 'maxDuration', { number: true, int: true, after: rescanAfterRuleChange });
+
+    const feed = document.createElement('div');
+    feed.className = 'sec';
+    feed.innerHTML = `<label>信息流加载</label>
+      <div class="switch"><input type="checkbox" id="bfb-boost"> 增大首页推荐每批加载数量</div>
+      <div class="hint">拦截层会删掉命中项，开启后让每批多取一些视频，删后信息流更饱满。下次加载 / 刷新生效；个别情况下可能影响载入，异常就关掉。</div>`;
+    G.api.appendChild(feed);
+    bindControl(feed, 'bfb-boost', CONFIG, 'boostFeedLoad');
 
     const api = document.createElement('div');
     api.className = 'sec api';
@@ -1685,6 +2285,68 @@
     bindControl(api, 'bfb-charging', CONFIG, 'hideCharging', { after: rescanAfterRuleChange });
     syncApiBody();
     renderFields(G.api, API_CHIP_FIELDS);
+
+    // —— 评论区分组 ——
+    const cmt = document.createElement('div');
+    cmt.className = 'sec';
+    cmt.innerHTML = `
+      <label>💬 评论区过滤</label>
+      <div class="switch"><input type="checkbox" id="bfb-cmt"> <b>启用评论区过滤</b></div>
+      <div class="hint">读取评论数据后隐藏命中的评论，仅在有评论的页面（播放页 / 动态 / 空间等）生效。下面规则与视频黑名单互相独立。</div>
+      <div id="bfb-cmt-body" style="margin-top:6px">
+        <div class="switch" style="font-weight:400">评论者等级低于 <input type="number" id="bfb-cmt-level" min="0" max="6" style="width:56px"> 级则隐藏（0=不启用）</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-noface"> 隐藏 默认头像且非会员（疑似小号/水军）</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-bot"> 隐藏 AI 机器人发布的评论</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-callbot"> 隐藏 召唤 AI 的评论</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-ad"> 隐藏 带货 / 导流广告评论</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-callonly"> 隐藏 只含 @他人 的空评论</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-emoji"> 隐藏 纯表情评论</div>
+        <label style="margin-top:10px">⭐ 免过滤（白名单）</label>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-up"> UP 主的评论</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-pin"> 置顶评论</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-me"> 我自己 / @我 的评论</div>
+      </div>`;
+    G.comment.appendChild(cmt);
+    const cmtBody = cmt.querySelector('#bfb-cmt-body');
+    const syncCmtBody = () => {
+      cmtBody.style.opacity = CONFIG.comment.enabled ? '1' : '.4';
+      cmtBody.style.pointerEvents = CONFIG.comment.enabled ? 'auto' : 'none';
+    };
+    bindControl(cmt, 'bfb-cmt', CONFIG.comment, 'enabled', {
+      after: () => {
+        syncCmtBody();
+        rescanAfterRuleChange();
+      },
+    });
+    bindControl(cmt, 'bfb-cmt-level', CONFIG.comment, 'minLevel', { number: true, int: true, after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-noface', CONFIG.comment, 'hideNoFace', { after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-bot', CONFIG.comment, 'hideBot', { after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-callbot', CONFIG.comment, 'hideCallBot', { after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-ad', CONFIG.comment, 'hideAd', { after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-callonly', CONFIG.comment, 'hideCallOnly', { after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-emoji', CONFIG.comment, 'hideEmojiOnly', { after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-up', CONFIG.comment, 'allowUp', { after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-pin', CONFIG.comment, 'allowPin', { after: rescanAfterRuleChange });
+    bindControl(cmt, 'bfb-cmt-me', CONFIG.comment, 'allowMe', { after: rescanAfterRuleChange });
+    syncCmtBody();
+    renderListField(G.comment, {
+      label: '🚫 评论关键词',
+      placeholder: '如：引战词 或 /.../　',
+      hint: '评论正文命中即隐藏。普通词=包含；/.../ =正则。与视频关键词相互独立。',
+      model: chipModel(CONFIG.comment.keywords),
+    });
+    renderListField(G.comment, {
+      label: '🚫 评论用户名（精确）',
+      placeholder: '精确用户名',
+      hint: '按评论者用户名精确隐藏其评论。可在评论区右键用户名快捷加入。',
+      model: chipModel(CONFIG.comment.userNames),
+    });
+    renderListField(G.comment, {
+      label: '🚫 用户名关键词',
+      placeholder: '如：营销 或 /.../',
+      hint: '按评论者昵称关键词隐藏。普通词=包含；/.../ =正则。',
+      model: chipModel(CONFIG.comment.userNameKeywords),
+    });
 
     renderFields(G.allow, ALLOW_FIELDS);
 
@@ -1762,7 +2424,7 @@
       <div class="hint">扫描本页所有被屏蔽的卡片并拉黑其 UP；拿不到 UID 的会用 BV 号联网解析。此操作写入账号黑名单、不可一键撤销，会二次确认。</div>`;
     G.tools.appendChild(batch);
     batch.querySelector('#bfb-batch-block').onclick = () => {
-      const blocked = document.querySelectorAll('[data-bfb-blocked]');
+      const blocked = document.querySelectorAll('[' + ATTR_BLOCKED + ']');
       if (!blocked.length) {
         toast('当前页还没有被屏蔽的卡片，先用规则屏蔽再批量拉黑');
         return;
@@ -1772,8 +2434,9 @@
       let noInfo = 0;
       blocked.forEach((card) => {
         const i = extractCardInfo(card); // 实时重抠，避免首屏缓存空值
+        const cu = !i.uid && i.bvid ? cachedUid(i.bvid) : '';
         if (i.uid) direct.push({ uid: String(i.uid), name: i.up || '' });
-        else if (i.bvid && bvUidCache.get(i.bvid)) direct.push({ uid: String(bvUidCache.get(i.bvid)), name: i.up || '' });
+        else if (cu) direct.push({ uid: cu, name: i.up || '' });
         else if (i.bvid) toResolve.push({ bvid: i.bvid, name: i.up || '' });
         else noInfo++;
       });
@@ -1879,7 +2542,12 @@
             b.bvid ||
             (b.uid ? 'UID ' + b.uid : '') ||
             '(无可辨识信息)';
-          const srcTag = b.src === 'NET' ? '<span class="log-src net">拦</span>' : '<span class="log-src dom">隐</span>';
+          const srcTag =
+            b.src === 'NET'
+              ? '<span class="log-src net">拦</span>'
+              : b.src === 'CMT'
+              ? '<span class="log-src dom">评</span>'
+              : '<span class="log-src dom">隐</span>';
           tx.innerHTML = `${srcTag}<span class="log-rs">[${escapeHtml(b.reason)}]</span> ${b.up ? '<b>' + escapeHtml(b.up) + '</b> · ' : ''}${escapeHtml(desc)}`;
           if (b.link) tx.title = b.link;
           row.appendChild(tx);
@@ -1976,21 +2644,42 @@
     );
     updateBadge();
     applyHotSearchStyle();
+    harvestShadowRoots(document);
     scanAll();
-    document.addEventListener('contextmenu', onContextMenu, true);
+    scanComments();
+    // 事件处理全部走错误边界，单次异常不致让监听器静默失效
+    document.addEventListener('contextmenu', safe('onContextMenu', onContextMenu), true);
+    document.addEventListener('mouseover', safe('onCardHover', onCardHover), true);
+    document.addEventListener('scroll', safe('hideHoverBtn', hideHoverBtn), true);
 
     // 信息流无限滚动：节流扫描新卡（已处理过的卡会被廉价短路跳过）
-    const observer = new MutationObserver((muts) => {
+    let sawShadowHost = false; // 本批是否出现新的 shadow host；没有就不做昂贵的全子树采集
+    const observer = new MutationObserver(safe('observer', (muts) => {
       let touched = false;
-      for (const m of muts) if (m.addedNodes && m.addedNodes.length) touched = true;
+      for (const m of muts) {
+        if (m.addedNodes && m.addedNodes.length) {
+          touched = true;
+          for (const n of m.addedNodes) {
+            if (n.nodeType === 1 && n.shadowRoot && n.id !== 'bfb-overlay-host') {
+              shadowRoots.add(n.shadowRoot);
+              sawShadowHost = true;
+            }
+          }
+        }
+      }
       if (touched) {
         if (start._t) return;
         start._t = setTimeout(() => {
           start._t = null;
+          // shadow host 极少出现：仅在本批确实新增了 host 时，才做一次（节流内的）全子树采集，常态零成本
+          if (sawShadowHost) {
+            sawShadowHost = false;
+            harvestShadowRoots(document);
+          }
           scanAll();
         }, 250);
       }
-    });
+    }));
     observer.observe(document.body, { childList: true, subtree: true });
 
     // 首屏稳定后弹一次「本次拦截」汇总：让你确认脚本真的在干活（区别于 B 站随机换批）
@@ -2014,8 +2703,9 @@
     GM_registerMenuCommand('打开官方黑名单管理页', () => window.open(BLACKLIST_MANAGE_URL, '_blank'));
   }
 
-  // 拦截层必须尽早安装（document-start，先于页面脚本发起请求）
+  // 拦截层必须尽早安装（document-start，先于页面脚本发起请求 / 构建评论组件）
   installNetworkHooks();
+  installShadowHook();
 
   // DOM 兜底层依赖 DOM，延迟到文档就绪再启动
   if (document.readyState === 'loading') {
