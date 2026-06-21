@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         biliHoyoFairy · 抗击黑潮
 // @namespace    https://github.com/gendu-amd/biliHoyoFairy
-// @version      0.0.4
+// @version      0.0.5
 // @description  B站(bilibili)推荐流净化：屏蔽黑流量、引战视频、商业广告与不想看的 UP 主。支持按 标签/UP主/UID/关键词(可正则)/分区/时长/播放量/BV 精准过滤；覆盖首页/热门/排行榜/搜索/播放页/动态/评论区；白名单优先防误伤；右键一键屏蔽/拉黑(同步账号黑名单)；内置预置关键词库。
 // @author       gendu-amd
 // @match        https://www.bilibili.com/*
@@ -1645,7 +1645,7 @@
     if (!csrf) {
       addLocal();
       if (!quiet) toast(`未登录，已本地屏蔽「${label}」(未同步账号黑名单)`);
-      cb && cb(false);
+      cb && cb(false, -101);
       return;
     }
     GM_xmlhttpRequest({
@@ -1667,23 +1667,31 @@
         addLocal();
         // 22120 = 已在黑名单，视作成功（幂等）
         const ok = code === 0 || code === 22120;
+        // 成功拉黑写入屏蔽记录（单发/批量共用），让用户能看到"这次拉黑了谁"
+        if (ok) logBlocked('拉黑', { up: upName || (CONFIG.uidNames && CONFIG.uidNames[String(uid)]) || '', uid: String(uid) }, 'BL');
         if (!quiet) {
           if (code === 0) toast(`已拉黑并同步账号黑名单：${label}（刷新后不再推荐）`);
           else if (code === 22120) toast(`「${label}」此前已在账号黑名单，已本地同步`);
           else toast(`账号侧拉黑失败（${REL_ERR[code] || msg || 'code ' + code}），已本地屏蔽：${label}`);
         }
-        cb && cb(ok);
+        cb && cb(ok, code);
       },
       onerror: () => {
         addLocal();
         if (!quiet) toast(`网络错误，已本地屏蔽：${label}`);
-        cb && cb(false);
+        cb && cb(false, null);
       },
     });
   }
 
-  // 顺序拉黑多个 UP（限速，避免触发风控）。targets: [{uid, name}]；cb(成功数, 总数)。
-  function doBlacklistMany(targets, cb) {
+  // 顺序拉黑多个 UP。targets:[{uid,name}]。按真实返回码如实分类，避免"谎报"。
+  //   cb({ added, already, failed:[{uid,code}], total })  —— 完成回调
+  //     added=本次新拉黑(code 0)；already=此前已在黑名单(22120)；failed=真正没拉成(风控/未登录/其它)
+  //   onProgress({done,added,already,ok,fail,total,paused,wait}) —— 实时进度（可选）
+  // 限速 + 抖动：批量比单发更保守，降低被风控概率；触发风控由 riskGuard 自动指数退避并在此暂停等待。
+  const BL_DELAY = 900; // 每次之间基础间隔(ms)
+  const BL_JITTER = 700; // 叠加随机抖动(ms)，降低规律性
+  function doBlacklistMany(targets, cb, onProgress) {
     const list = [];
     const seen = new Set();
     for (const t of targets) {
@@ -1693,25 +1701,54 @@
         list.push({ uid, name: (t && t.name) || '' });
       }
     }
-    let ok = 0;
+    let added = 0; // code 0：本次新写入账号黑名单
+    let already = 0; // 22120：此前已在黑名单（不会让官方名单数量再增加）
+    let done = 0;
     let i = 0;
-    const next = () => {
-      if (i >= list.length) {
-        cb && cb(ok, list.length);
-        return;
+    const failed = []; // { uid, code }：真正没拉成的
+    const snapshot = (paused) => ({
+      done,
+      added,
+      already,
+      ok: added + already,
+      fail: failed.length,
+      total: list.length,
+      paused: !!paused,
+      wait: paused ? Math.ceil(riskGuard.remaining() / 1000) : 0,
+    });
+    const report = (paused) => onProgress && onProgress(snapshot(paused));
+    const finish = () => {
+      if (CONFIG.debug && failed.length) {
+        const byCode = {};
+        failed.forEach((f) => (byCode[f.code] = (byCode[f.code] || 0) + 1));
+        log('批量拉黑失败按 code 分布：', byCode, failed);
       }
-      // 熔断中：等退避窗口结束再继续，避免越拉越严
+      cb && cb({ added, already, failed, total: list.length });
+    };
+    const next = () => {
+      if (i >= list.length) return finish();
+      // 熔断中：等退避窗口结束再继续，并把"暂停中 + 已完成进度"实时告知调用方（避免用户以为卡死）
       if (riskGuard.blocked()) {
+        report(true);
         setTimeout(next, riskGuard.remaining() + 50);
         return;
       }
       const t = list[i++];
-      doBlacklist(t.uid, t.name, (s) => {
-        if (s) ok++;
-        setTimeout(next, 320);
-      }, true);
+      doBlacklist(
+        t.uid,
+        t.name,
+        (s, code) => {
+          done++;
+          if (code === 0) added++;
+          else if (code === 22120) already++;
+          else failed.push({ uid: t.uid, code });
+          report(false);
+          setTimeout(next, BL_DELAY + Math.random() * BL_JITTER);
+        },
+        true
+      );
     };
-    if (!list.length) cb && cb(0, 0);
+    if (!list.length) finish();
     else next();
   }
 
@@ -2276,6 +2313,25 @@
     host.appendChild(sec);
   }
 
+  // 把多条输入拆成规则数组（正则感知）：换行总是分隔；以 / 开头的行视为整条正则、不按逗号拆
+  // （避免把 /震惊{2,3}/、/(a|b){1,2}/ 这类含逗号的正则拆断）；其余行才按 逗号/分号 拆。
+  function splitRuleInput(raw) {
+    const out = [];
+    for (const ln of String(raw || '').split('\n')) {
+      const s = ln.trim();
+      if (!s) continue;
+      if (s[0] === '/') {
+        out.push(s); // 整行正则，保留其中的逗号
+        continue;
+      }
+      for (const x of s.split(/[,，;；]/)) {
+        const v = x.trim();
+        if (v) out.push(v);
+      }
+    }
+    return out;
+  }
+
   // 普通 chip 列表（关键词 / BV / 标签 / 白名单…）；groupMode=组合标签
   function chipModel(arr, groupMode) {
     return {
@@ -2298,7 +2354,7 @@
           toast('该组合已存在');
           return false;
         }
-        const parts = raw.split(/[,，;；\n]/).map((s) => s.trim()).filter(Boolean);
+        const parts = splitRuleInput(raw);
         if (!parts.length) return false;
         let added = 0;
         for (const v of parts) if (addToList(arr, v)) added++;
@@ -2326,7 +2382,7 @@
         uids.length = 0;
       },
       add: (raw) => {
-        const parts = raw.split(/[,，;；\n]/).map((s) => s.trim()).filter(Boolean);
+        const parts = splitRuleInput(raw);
         if (!parts.length) return false;
         let added = 0;
         for (const v of parts) if (addToList(/^\d+$/.test(v) ? uids : names, v)) added++;
@@ -2902,8 +2958,8 @@
 
       const runBlacklist = (all) => {
         toast(`开始拉黑 ${all.length} 位…`);
-        doBlacklistMany(all, (n, total) => {
-          toast(`批量拉黑完成：${n}/${total} 位成功${n < total ? '（失败多为未登录/风控，可稍后重试）' : ''}`);
+        doBlacklistMany(all, (r) => {
+          toast(`批量拉黑完成：新拉黑 ${r.added}，已在黑名单 ${r.already}${r.failed.length ? `，失败 ${r.failed.length}（多为未登录/风控/已满）` : ''}`);
           refreshPanelIfOpen();
         });
       };
@@ -2924,6 +2980,156 @@
           if (--pending === 0) runBlacklist(direct.concat(resolved));
         });
       });
+    };
+
+    // —— 名单批量处理：粘贴/文件/URL 载入一批 UID 或名称 → 仅屏蔽（本地）或 拉黑（写账号黑名单）——
+    const listSec = document.createElement('div');
+    listSec.className = 'sec';
+    listSec.innerHTML = `<label>名单批量处理（粘贴 / 文件 / URL）</label>
+      <textarea id="bfb-list-input" rows="4" placeholder="粘贴一批 UID 或 UP 名，空格 / 逗号 / 换行 / 分号 分隔均可。&#10;纯数字按 UID；其它按 UP 名；也支持 uid:123 / up:名字 前缀。" style="width:100%;box-sizing:border-box;resize:vertical;font-family:monospace;font-size:12px;padding:6px;border:1px solid #ddd;border-radius:6px"></textarea>
+      <div class="toolbar" style="margin-top:6px">
+        <button class="act ghost" id="bfb-list-file">📁 从文件载入</button>
+        <button class="act ghost" id="bfb-list-url">🔗 从 URL 载入</button>
+      </div>
+      <div class="toolbar" style="margin-top:6px">
+        <button class="act" id="bfb-list-hide">仅屏蔽（本地）</button>
+        <button class="act ghost" id="bfb-list-block" style="color:#e74c3c">⛔ 拉黑（写账号黑名单）</button>
+      </div>
+      <div class="hint">「仅屏蔽」只在本地隐藏、不碰账号；「拉黑」会写入账号黑名单（刷新后不再推荐），限速执行、触发风控自动暂停续传、<b>不可一键撤销</b>、执行前二次确认。只有名称没 UID 的，拉黑时自动降级为仅本地屏蔽。拉黑成功的会进下方「屏蔽记录」。</div>
+      <div id="bfb-list-status" class="stat" style="margin-top:6px;min-height:1.2em"></div>`;
+    // 归到「导入/导出」一族：插到「规则订阅」之前，紧跟导入区
+    G.tools.insertBefore(listSec, subSec);
+    const listTa = listSec.querySelector('#bfb-list-input');
+    const listStatus = listSec.querySelector('#bfb-list-status');
+    // 解析输入：拆分（空格/逗号/换行/分号/顿号）→ 纯数字或 uid:前缀=UID，up:前缀或其它=名称；跳过 ! # 注释行首
+    const parseList = () => {
+      const uids = [];
+      const names = [];
+      const seen = new Set();
+      const addUid = (u) => {
+        if (!seen.has(u)) {
+          seen.add(u);
+          uids.push(u);
+        }
+      };
+      String(listTa.value || '')
+        .split(/[\s,，;；、]+/)
+        .forEach((tok) => {
+          const t = (tok || '').trim();
+          if (!t || t[0] === '!' || t[0] === '#') return;
+          let m;
+          if ((m = t.match(/^uid:\s*(\d+)$/i))) addUid(m[1]);
+          else if ((m = t.match(/^up:\s*(.+)$/i))) {
+            const nm = m[1].trim();
+            if (nm) names.push(nm);
+          } else if (/^\d{3,}$/.test(t)) addUid(t);
+          else names.push(t);
+        });
+      return { uids, names };
+    };
+    // 仅屏蔽：UID→block.uids，名称→block.upNames（批量去重，最后统一存盘+重扫，避免逐条重扫）
+    const addLocalMany = (uids, names) => {
+      let n = 0;
+      const push = (arr, v) => {
+        if (!arr.map(String).includes(String(v))) {
+          arr.push(String(v));
+          n++;
+        }
+      };
+      uids.forEach((u) => push(CONFIG.block.uids, u));
+      names.forEach((nm) => push(CONFIG.block.upNames, nm));
+      if (n) {
+        saveConfig();
+        rescanAfterRuleChange();
+      }
+      return n;
+    };
+    listSec.querySelector('#bfb-list-file').onclick = () => {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.txt,.csv,.json,text/plain,application/json';
+      inp.onchange = () => {
+        const f = inp.files && inp.files[0];
+        if (!f) return;
+        const r = new FileReader();
+        r.onload = () => {
+          listTa.value = (listTa.value ? listTa.value + '\n' : '') + String(r.result || '');
+          toast('已载入文件内容到输入框，确认后点 仅屏蔽 / 拉黑');
+        };
+        r.readAsText(f);
+      };
+      inp.click();
+    };
+    listSec.querySelector('#bfb-list-url').onclick = () => {
+      const url = (prompt('输入名单 URL（纯文本：每行一个 UID 或 UP 名）：') || '').trim();
+      if (!url) return;
+      if (!/^https?:\/\//i.test(url)) return toast('请输入有效的 http(s) URL');
+      if (typeof GM_xmlhttpRequest !== 'function') return toast('当前环境不支持联网载入');
+      toast('载入中…');
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        timeout: 15000,
+        onload: (r) => {
+          if (r.status >= 200 && r.status < 300 && r.responseText) {
+            listTa.value = (listTa.value ? listTa.value + '\n' : '') + r.responseText;
+            toast('已载入 URL 内容到输入框，确认后点 仅屏蔽 / 拉黑');
+          } else toast('载入失败：HTTP ' + r.status);
+        },
+        onerror: () => toast('网络错误，载入失败'),
+        ontimeout: () => toast('载入超时'),
+      });
+    };
+    listSec.querySelector('#bfb-list-hide').onclick = () => {
+      const { uids, names } = parseList();
+      if (!uids.length && !names.length) return toast('没解析到有效的 UID / 名称');
+      const n = addLocalMany(uids, names);
+      toast(`已本地屏蔽：新增 ${n} 条（解析到 UID ${uids.length} / 名称 ${names.length}）`);
+      renderPanel(p);
+      p.classList.add('open');
+    };
+    listSec.querySelector('#bfb-list-block').onclick = () => {
+      const { uids, names } = parseList();
+      if (!uids.length && !names.length) return toast('没解析到有效的 UID / 名称');
+      const est = Math.ceil(uids.length * 1.3); // 约 0.9~1.6s/个
+      const nameTip = names.length ? `\n另有 ${names.length} 个只有名称（无 UID）→ 仅本地屏蔽，不写账号` : '';
+      if (uids.length && !confirm(`将把 ${uids.length} 个 UID 写入你的账号黑名单（限速约 ${est} 秒起，触发风控会自动暂停续传、耗时更久），不可一键撤销。${nameTip}\n\n执行期间请保持此页面打开。确定继续？`)) return;
+      const nLocal = addLocalMany([], names); // 名称部分仅本地屏蔽
+      if (!uids.length) {
+        toast(`无 UID 可账号拉黑；已本地屏蔽 ${nLocal} 个名称`);
+        renderPanel(p);
+        p.classList.add('open');
+        return;
+      }
+      toast(`开始拉黑 ${uids.length} 个…执行期间请勿关闭面板`);
+      listStatus.textContent = `准备拉黑 ${uids.length} 个…`;
+      doBlacklistMany(
+        uids.map((u) => ({ uid: u, name: '' })),
+        (r) => {
+          // 如实拆分：新拉黑(code0) / 此前已在黑名单(22120) / 失败(各 code)。失败回填输入框便于一键重试。
+          const failUids = r.failed.map((f) => f.uid);
+          const byCode = {};
+          r.failed.forEach((f) => (byCode[f.code] = (byCode[f.code] || 0) + 1));
+          const failBreak = Object.entries(byCode)
+            .map(([c, n]) => `${REL_ERR[c] || 'code ' + c}×${n}`)
+            .join('、');
+          listStatus.innerHTML =
+            `✅ 完成（共 ${r.total}）：<b>新拉黑 ${r.added}</b>` +
+            (r.already ? ` · 此前已在黑名单 ${r.already}` : '') +
+            (failUids.length ? ` · <b style="color:#e74c3c">失败 ${failUids.length}</b>（${escapeHtml(failBreak)}；已回填可重试）` : '') +
+            (nLocal ? ` · 另本地屏蔽 ${nLocal} 名称` : '') +
+            `<br><span style="color:#888">官方黑名单本次新增 = 新拉黑 ${r.added} 个（"已在黑名单"的不会再叠加；如仍对不上，多为风控/已满，开调试模式看控制台 code 明细）</span>`;
+          listTa.value = failUids.length ? failUids.join('\n') : '';
+          toast(`完成：新拉黑 ${r.added}，已在黑名单 ${r.already}，失败 ${failUids.length}`);
+          if (panelStatsRefresh) panelStatsRefresh();
+        },
+        (pg) => {
+          listStatus.textContent = pg.paused
+            ? `⚠ 触发风控，已暂停约 ${pg.wait}s 后自动继续 · 进度 ${pg.done}/${pg.total}（新拉黑 ${pg.added}，已在 ${pg.already}，失败 ${pg.fail}）`
+            : `拉黑中 ${pg.done}/${pg.total} · 新拉黑 ${pg.added}${pg.already ? `，已在 ${pg.already}` : ''}${pg.fail ? `，失败 ${pg.fail}` : ''}…`;
+          if (panelStatsRefresh) panelStatsRefresh();
+        }
+      );
     };
 
     const tool = document.createElement('div');
@@ -2994,13 +3200,21 @@
             (b.uid ? 'UID ' + b.uid : '') ||
             '(无可辨识信息)';
           const srcTag =
-            b.src === 'NET'
+            b.src === 'BL'
+              ? '<span class="log-src net">黑</span>'
+              : b.src === 'NET'
               ? '<span class="log-src net">拦</span>'
               : b.src === 'CMT'
               ? '<span class="log-src dom">评</span>'
               : '<span class="log-src dom">隐</span>';
           tx.innerHTML = `${srcTag}<span class="log-rs">[${escapeHtml(b.reason)}]</span> ${b.up ? '<b>' + escapeHtml(b.up) + '</b> · ' : ''}${escapeHtml(desc)}`;
-          if (b.link) tx.title = b.link;
+          // hover 显示完整信息（标题常被截断，便于二次确认是否拉黑）：UP · 完整标题 · BV，附落地页
+          tx.title =
+            (b.up ? b.up + ' · ' : '') +
+            (b.title || desc) +
+            (b.bvid ? '  ·  ' + b.bvid : '') +
+            (b.uid ? '  ·  UID ' + b.uid : '') +
+            (b.link ? '\n' + b.link : '');
           row.appendChild(tx);
           // 放行（撤销/防误伤）：把该 UP 加白名单，永不再拦。DOM 隐藏的立刻恢复；网络拦截删掉的需刷新页面。
           if (b.up || b.uid) {
