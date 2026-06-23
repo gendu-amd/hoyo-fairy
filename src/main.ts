@@ -29,6 +29,7 @@ import { setRulesChangedHandler } from './events';
 import { CMT_TAGS, scanComments, scheduleCommentScan } from './comments';
 import { blacklistUp, doBlacklistMany, REL_ERR } from './blacklist';
 import { applyHotSearchStyle } from './hotsearch';
+import { processCard, queryCards, scanAll, rescanAfterRuleChange } from './dom';
 /*
  * 架构（拦截优先 + DOM 兜底）：
  *   1. 拦截层（主）：document-start 时 hook fetch / XHR，被动过滤 B 站自身请求的 JSON 列表
@@ -120,173 +121,10 @@ import { applyHotSearchStyle } from './hotsearch';
     } catch (e) {}
   }
 
-  /* ===================== 5. 拦截执行 ===================== */
-  // PROCESSED 已抽到 ./constants
-  // blockedLog / tallyLog / logBlocked / recordBlock / sessionBlocked 已抽到 ./stats（见顶部 import）
-  const countedEls = new WeakSet(); // DOM 兜底「已计数」去重（属 DOM 层，留待 L4 随 dom 一起抽）
+  /* ===================== 5. 拦截执行（DOM 兜底层） ===================== */
+  // clearVisual / markCard / blockVideo / processCard / evaluateApi / queryCards / scanAll /
+  // rescanAfterRuleChange / countedEls 已抽到 ./dom（见顶部 import）。
   let panelStatsRefresh = null; // 面板打开时的「屏蔽记录」刷新器（renderPanel 注册，stats 监听器读取）
-
-  // 撤销 DOM 层对某卡的隐藏 / 审查标记（规则变更后重扫时调用）
-  function clearVisual(card) {
-    card.style.display = '';
-    card.classList.remove('bfb-review');
-    const t = card.querySelector(':scope > .bfb-tag');
-    if (t) t.remove();
-    card.removeAttribute(ATTR_BLOCKED);
-    const cell = cellOf(card);
-    if (cell !== card) cell.style.display = '';
-  }
-
-  // 审查模式：不隐藏，给卡片打醒目标记 + 原因 + 就地「放行」按钮，便于核对防误伤
-  function markCard(card, reason, info) {
-    card.classList.add('bfb-review');
-    if (card.querySelector(':scope > .bfb-tag')) return;
-    const tag = document.createElement('div');
-    tag.className = 'bfb-tag';
-    const rs = document.createElement('span');
-    rs.className = 'rs';
-    rs.textContent = '已判定拦截 · ' + reason;
-    tag.appendChild(rs);
-    if (info.up || info.uid || info.bvid) {
-      const pass = document.createElement('button');
-      pass.textContent = '✅放行';
-      pass.title = '误伤了？把该 UP 加白名单，永不再拦';
-      pass.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (info.uid) addToList(CONFIG.allow.uids, info.uid);
-        else if (info.up) addToList(CONFIG.allow.upNames, info.up);
-        else if (info.bvid) addToList(CONFIG.allow.keywords, info.title || info.bvid);
-        toast('已放行：' + (info.up || info.title || info.bvid));
-        refreshPanelIfOpen();
-      };
-      tag.appendChild(pass);
-    }
-    card.appendChild(tag);
-  }
-
-  // recordBlock 已抽到 ./stats（命中后经 setStatsListener 回调更新角标 / 面板）
-
-  // DOM 兜底层：审查模式标记、否则直接隐藏漏网卡。主路径由网络拦截层在渲染前就删除。
-  function blockVideo(card, reason, info) {
-    if (CONFIG.reviewMode) {
-      markCard(card, reason, info);
-    } else {
-      const cell = cellOf(card);
-      if (!isUnsafeHideTarget(cell)) cell.style.display = 'none';
-      card.style.display = 'none';
-    }
-    card.setAttribute(ATTR_BLOCKED, '1'); // 供「批量拉黑」扫描
-    if (countedEls.has(card)) return;
-    countedEls.add(card);
-    recordBlock(reason, info, 'DOM');
-  }
-
-  // 单卡处理用错误边界包裹：异形卡导致 extractCardInfo/matchRule 抛错时，只跳过这一张、不中断整轮扫描
-  const processCard = safe('processCard', function (card) {
-    if (!CONFIG.enabled) return;
-    if (card.getAttribute(PROCESSED)) return;
-    const info = extractCardInfo(card, M.needUid); // 无 UID 规则时跳过昂贵的 innerHTML 兜底
-    if (!info.title && !info.up && !info.isLive) return; // 骨架卡，等填充后再处理（直播卡常无标题，放行交给规则判定）
-    card.setAttribute(PROCESSED, '1');
-    card._bfbInfo = info;
-    const hit = matchRule(info);
-    if (!hit) log(`放行✅ | 标题:${info.title || '(无)'} | UP:${info.up || '(无)'} | 标签:${info.partition || '(无)'}`);
-    if (hit) {
-      blockVideo(card, hit, info);
-      return;
-    }
-    // 过了本地规则、未命中白名单、且开了精确过滤 → 按需取数再判（限速、缓存）
-    if (info.bvid && apiRulesActive()) evaluateApi(card, info);
-  });
-
-  // 异步评估：只取需要的接口，命中则隐藏/标记（与本地规则同一套出口 blockVideo）
-  function evaluateApi(card, info) {
-    if (card.getAttribute(ATTR_API)) return;
-    card.setAttribute(ATTR_API, '1');
-    const need = apiNeeds();
-    let view = null;
-    let tags = null;
-    let cardData = null;
-    let pending = 0;
-    const finish = () => {
-      if (pending > 0) return;
-      if (!CONFIG.enabled || isWhitelisted(info)) return;
-      const hit = matchApi(info, view, tags, cardData);
-      if (hit) blockVideo(card, hit, info);
-      else log(`API放行 | ${info.title || ''}`);
-    };
-    const afterView = () => {
-      // UP 卡片需要 mid：优先 DOM 抠的，没有就用 view.owner.mid
-      if (need.needCard) {
-        const mid = info.uid || (view && view.owner && view.owner.mid);
-        if (mid) {
-          pending++;
-          fetchCard(mid, (c) => {
-            cardData = c;
-            pending--;
-            finish();
-          });
-        }
-      }
-      finish();
-    };
-    if (need.needView) {
-      pending++;
-      fetchView(info.bvid, (v) => {
-        view = v;
-        pending--;
-        afterView();
-      });
-    }
-    if (need.needTag) {
-      pending++;
-      fetchTags(info.bvid, (t) => {
-        tags = t;
-        pending--;
-        finish();
-      });
-    }
-  }
-
-  // 已知的开放 Shadow Root 注册表：部分卡片可能渲染在 shadow DOM 内，普通 querySelectorAll 选不中。
-  // 启动时全量采集一次，之后只在 MutationObserver 的新增节点子树里增量采集，避免每次扫描全量遍历（借鉴 codertesla queryAllDeep）。
-  // shadowRoots / harvestShadowRoots 已抽到 ./dom/shadow（见顶部 import）
-  // 普通 DOM 卡片 ∪ 各存活 shadow root 内的卡片
-  function queryCards() {
-    const out = Array.from(document.querySelectorAll(VIDEO_CARD_SELECTOR));
-    for (const r of shadowRoots) {
-      if (!r.host || !r.host.isConnected) {
-        shadowRoots.delete(r);
-        continue;
-      }
-      try {
-        const found = r.querySelectorAll(VIDEO_CARD_SELECTOR);
-        if (found.length) out.push(...found);
-      } catch (e) {}
-    }
-    return out;
-  }
-
-  function scanAll() {
-    if (!CONFIG.enabled) return;
-    queryCards().forEach((card) => {
-      if (card.getAttribute(PROCESSED)) return;
-      if (card.closest && card.closest('.recommended-swipe')) return; // 顶部轮播 banner，跳过
-      processCard(card);
-    });
-  }
-
-  function rescanAfterRuleChange() {
-    rebuildRules();
-    document.querySelectorAll('[' + PROCESSED + ']').forEach((el) => {
-      el.removeAttribute(PROCESSED);
-      el.removeAttribute(ATTR_API);
-      clearVisual(el);
-    });
-    scanAll();
-    scanComments(); // ruleVersion 已自增，评论会按新规则重判
-  }
 
   /* ===================== 5c. 评论区过滤（读评论组件 __data，DOM 层隐藏） ===================== */
   // CMT_TAGS / scanComments / scheduleCommentScan 等已抽到 ./comments（见顶部 import）。
