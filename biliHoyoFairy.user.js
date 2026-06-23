@@ -1429,6 +1429,214 @@
     }, 300);
   }
 
+  // src/blacklist.ts
+  function resolveUidByBvid(bvid, cb) {
+    fetchView(bvid, (d) => {
+      if (d && d.owner) cb(String(d.owner.mid), d.owner.name || "");
+      else cb("", "");
+    });
+  }
+  var REL_ERR = {
+    "-101": "未登录或登录已过期",
+    "-111": "CSRF 校验失败，请刷新页面重试",
+    "-352": "触发 B 站风控，请稍后再试",
+    22120: "该用户已在你的黑名单中"
+  };
+  function doBlacklist(uid, upName, cb, quiet) {
+    const label = upName || uid;
+    const addLocal = () => {
+      if (upName) CONFIG.uidNames[String(uid)] = upName;
+      addToList(CONFIG.block.uids, String(uid));
+    };
+    const csrf = getCookie("bili_jct");
+    if (!csrf) {
+      addLocal();
+      if (!quiet) toast(`未登录，已本地屏蔽「${label}」(未同步账号黑名单)`);
+      cb && cb(false, -101);
+      return;
+    }
+    GM_xmlhttpRequest({
+      method: "POST",
+      url: "https://api.bilibili.com/x/relation/modify",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      // gaia_source=web_main 贴合当前官方 web 端行为，降低被风控/失败概率
+      data: `fid=${encodeURIComponent(uid)}&act=5&re_src=11&gaia_source=web_main&csrf=${encodeURIComponent(csrf)}`,
+      withCredentials: true,
+      onload: (res) => {
+        let code = null;
+        let msg = "";
+        try {
+          const j = JSON.parse(res.responseText);
+          code = j.code;
+          msg = j.message || "";
+        } catch (e) {
+        }
+        riskGuard.note(code);
+        addLocal();
+        const ok = code === 0 || code === 22120;
+        if (ok) logBlocked("拉黑", { up: upName || CONFIG.uidNames && CONFIG.uidNames[String(uid)] || "", uid: String(uid) }, "BL");
+        if (!quiet) {
+          if (code === 0) toast(`已拉黑并同步账号黑名单：${label}（刷新后不再推荐）`);
+          else if (code === 22120) toast(`「${label}」此前已在账号黑名单，已本地同步`);
+          else toast(`账号侧拉黑失败（${REL_ERR[code] || msg || "code " + code}），已本地屏蔽：${label}`);
+        }
+        cb && cb(ok, code);
+      },
+      onerror: () => {
+        addLocal();
+        if (!quiet) toast(`网络错误，已本地屏蔽：${label}`);
+        cb && cb(false, null);
+      }
+    });
+  }
+  var BL_DELAY = 900;
+  var BL_JITTER = 700;
+  function doBlacklistMany(targets, cb, onProgress) {
+    const list = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const t of targets) {
+      const uid = String(t && t.uid || "");
+      if (uid && !seen.has(uid)) {
+        seen.add(uid);
+        list.push({ uid, name: t && t.name || "" });
+      }
+    }
+    let added = 0;
+    let already = 0;
+    let done = 0;
+    let i = 0;
+    const failed = [];
+    const snapshot = (paused) => ({
+      done,
+      added,
+      already,
+      ok: added + already,
+      fail: failed.length,
+      total: list.length,
+      paused: !!paused,
+      wait: paused ? Math.ceil(riskGuard.remaining() / 1e3) : 0
+    });
+    const report = (paused) => onProgress && onProgress(snapshot(paused));
+    const finish = () => {
+      if (CONFIG.debug && failed.length) {
+        const byCode = {};
+        failed.forEach((f) => byCode[f.code] = (byCode[f.code] || 0) + 1);
+        log("批量拉黑失败按 code 分布：", byCode, failed);
+      }
+      cb && cb({ added, already, failed, total: list.length });
+    };
+    const next = () => {
+      if (i >= list.length) return finish();
+      if (riskGuard.blocked()) {
+        report(true);
+        setTimeout(next, riskGuard.remaining() + 50);
+        return;
+      }
+      const t = list[i++];
+      doBlacklist(
+        t.uid,
+        t.name,
+        (s, code) => {
+          done++;
+          if (code === 0) added++;
+          else if (code === 22120) already++;
+          else failed.push({ uid: t.uid, code });
+          report(false);
+          setTimeout(next, BL_DELAY + Math.random() * BL_JITTER);
+        },
+        true
+      );
+    };
+    if (!list.length) finish();
+    else next();
+  }
+  function blacklistUp(info, cb, cardEl) {
+    let uid = info && info.uid ? String(info.uid) : "";
+    let upName = info && info.up || "";
+    let bvid = info && info.bvid || "";
+    if (cardEl) {
+      const live = extractCardInfo(cardEl);
+      uid = uid || live.uid;
+      upName = upName || live.up;
+      bvid = bvid || live.bvid;
+    }
+    if (CONFIG.blacklistCollab && bvid) {
+      toast("正在读取联合投稿名单…");
+      fetchView(bvid, (d) => {
+        const targets = [];
+        if (d && d.owner) targets.push({ uid: d.owner.mid, name: d.owner.name || "" });
+        if (d && Array.isArray(d.staff)) d.staff.forEach((s) => targets.push({ uid: s.mid, name: s.name || "" }));
+        if (!targets.length && uid) targets.push({ uid, name: upName });
+        if (!targets.length) {
+          if (upName) {
+            addToList(CONFIG.block.upNames, upName);
+            toast(`未能解析名单，已按 UP 名本地屏蔽：${upName}`);
+          } else {
+            toast("该卡片信息不足，无法拉黑");
+          }
+          cb && cb(false);
+          return;
+        }
+        doBlacklistMany(targets, (n, total) => {
+          toast(total > 1 ? `联合投稿：已拉黑 ${n}/${total} 位作者` : `已拉黑：${targets[0].name || targets[0].uid}`);
+          cb && cb(n > 0);
+        });
+      });
+      return;
+    }
+    if (uid) {
+      doBlacklist(uid, upName, cb);
+      return;
+    }
+    if (bvid) {
+      toast("正在解析该 UP 的 UID…");
+      resolveUidByBvid(bvid, (rid, rname) => {
+        if (rid) {
+          doBlacklist(rid, rname || upName, cb);
+        } else if (upName) {
+          addToList(CONFIG.block.upNames, upName);
+          toast(`未能解析 UID，已按 UP 名本地屏蔽：${upName}`);
+          cb && cb(false);
+        } else {
+          toast("未能解析该 UP，已跳过");
+          cb && cb(false);
+        }
+      });
+      return;
+    }
+    if (upName) {
+      addToList(CONFIG.block.upNames, upName);
+      toast(`该卡片没拿到 UID/BV，已按 UP 名本地屏蔽：${upName}`);
+    } else {
+      toast("该卡片信息不足，无法拉黑");
+    }
+    cb && cb(false);
+  }
+
+  // src/hotsearch.ts
+  var HOTSEARCH_SELECTORS = [
+    ".trending",
+    ".search-panel .trending-list",
+    ".search-panel-popover .trending",
+    '.bili-header [class*="trending"]',
+    '.center-search-container [class*="trending"]',
+    '.search-panel [class*="trending"]',
+    '.history-panel [class*="trending"]'
+  ];
+  function applyHotSearchStyle() {
+    let st = document.getElementById("bfb-hotsearch-style");
+    if (CONFIG.hideHotSearch) {
+      if (!st) {
+        st = document.createElement("style");
+        st.id = "bfb-hotsearch-style";
+        document.head.appendChild(st);
+      }
+      st.textContent = HOTSEARCH_SELECTORS.join(",") + "{display:none !important}";
+    } else if (st) {
+      st.remove();
+    }
+  }
+
   // src/main.ts
   (function() {
     "use strict";
@@ -1604,188 +1812,6 @@
       });
       scanAll();
       scanComments();
-    }
-    function resolveUidByBvid(bvid, cb) {
-      fetchView(bvid, (d) => {
-        if (d && d.owner) cb(String(d.owner.mid), d.owner.name || "");
-        else cb("", "");
-      });
-    }
-    const REL_ERR = {
-      "-101": "未登录或登录已过期",
-      "-111": "CSRF 校验失败，请刷新页面重试",
-      "-352": "触发 B 站风控，请稍后再试",
-      22120: "该用户已在你的黑名单中"
-    };
-    function doBlacklist(uid, upName, cb, quiet) {
-      const label = upName || uid;
-      const addLocal = () => {
-        if (upName) CONFIG.uidNames[String(uid)] = upName;
-        addToList(CONFIG.block.uids, String(uid));
-      };
-      const csrf = getCookie("bili_jct");
-      if (!csrf) {
-        addLocal();
-        if (!quiet) toast(`未登录，已本地屏蔽「${label}」(未同步账号黑名单)`);
-        cb && cb(false, -101);
-        return;
-      }
-      GM_xmlhttpRequest({
-        method: "POST",
-        url: "https://api.bilibili.com/x/relation/modify",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        // gaia_source=web_main 贴合当前官方 web 端行为，降低被风控/失败概率（借鉴 codertesla）
-        data: `fid=${encodeURIComponent(uid)}&act=5&re_src=11&gaia_source=web_main&csrf=${encodeURIComponent(csrf)}`,
-        withCredentials: true,
-        onload: (res) => {
-          let code = null;
-          let msg = "";
-          try {
-            const j = JSON.parse(res.responseText);
-            code = j.code;
-            msg = j.message || "";
-          } catch (e) {
-          }
-          riskGuard.note(code);
-          addLocal();
-          const ok = code === 0 || code === 22120;
-          if (ok) logBlocked("拉黑", { up: upName || CONFIG.uidNames && CONFIG.uidNames[String(uid)] || "", uid: String(uid) }, "BL");
-          if (!quiet) {
-            if (code === 0) toast(`已拉黑并同步账号黑名单：${label}（刷新后不再推荐）`);
-            else if (code === 22120) toast(`「${label}」此前已在账号黑名单，已本地同步`);
-            else toast(`账号侧拉黑失败（${REL_ERR[code] || msg || "code " + code}），已本地屏蔽：${label}`);
-          }
-          cb && cb(ok, code);
-        },
-        onerror: () => {
-          addLocal();
-          if (!quiet) toast(`网络错误，已本地屏蔽：${label}`);
-          cb && cb(false, null);
-        }
-      });
-    }
-    const BL_DELAY = 900;
-    const BL_JITTER = 700;
-    function doBlacklistMany(targets, cb, onProgress) {
-      const list = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const t of targets) {
-        const uid = String(t && t.uid || "");
-        if (uid && !seen.has(uid)) {
-          seen.add(uid);
-          list.push({ uid, name: t && t.name || "" });
-        }
-      }
-      let added = 0;
-      let already = 0;
-      let done = 0;
-      let i = 0;
-      const failed = [];
-      const snapshot = (paused) => ({
-        done,
-        added,
-        already,
-        ok: added + already,
-        fail: failed.length,
-        total: list.length,
-        paused: !!paused,
-        wait: paused ? Math.ceil(riskGuard.remaining() / 1e3) : 0
-      });
-      const report = (paused) => onProgress && onProgress(snapshot(paused));
-      const finish = () => {
-        if (CONFIG.debug && failed.length) {
-          const byCode = {};
-          failed.forEach((f) => byCode[f.code] = (byCode[f.code] || 0) + 1);
-          log("批量拉黑失败按 code 分布：", byCode, failed);
-        }
-        cb && cb({ added, already, failed, total: list.length });
-      };
-      const next = () => {
-        if (i >= list.length) return finish();
-        if (riskGuard.blocked()) {
-          report(true);
-          setTimeout(next, riskGuard.remaining() + 50);
-          return;
-        }
-        const t = list[i++];
-        doBlacklist(
-          t.uid,
-          t.name,
-          (s, code) => {
-            done++;
-            if (code === 0) added++;
-            else if (code === 22120) already++;
-            else failed.push({ uid: t.uid, code });
-            report(false);
-            setTimeout(next, BL_DELAY + Math.random() * BL_JITTER);
-          },
-          true
-        );
-      };
-      if (!list.length) finish();
-      else next();
-    }
-    function blacklistUp(info, cb, cardEl) {
-      let uid = info && info.uid ? String(info.uid) : "";
-      let upName = info && info.up || "";
-      let bvid = info && info.bvid || "";
-      if (cardEl) {
-        const live = extractCardInfo(cardEl);
-        uid = uid || live.uid;
-        upName = upName || live.up;
-        bvid = bvid || live.bvid;
-      }
-      if (CONFIG.blacklistCollab && bvid) {
-        toast("正在读取联合投稿名单…");
-        fetchView(bvid, (d) => {
-          const targets = [];
-          if (d && d.owner) targets.push({ uid: d.owner.mid, name: d.owner.name || "" });
-          if (d && Array.isArray(d.staff)) d.staff.forEach((s) => targets.push({ uid: s.mid, name: s.name || "" }));
-          if (!targets.length && uid) targets.push({ uid, name: upName });
-          if (!targets.length) {
-            if (upName) {
-              addToList(CONFIG.block.upNames, upName);
-              toast(`未能解析名单，已按 UP 名本地屏蔽：${upName}`);
-            } else {
-              toast("该卡片信息不足，无法拉黑");
-            }
-            cb && cb(false);
-            return;
-          }
-          doBlacklistMany(targets, (n, total) => {
-            toast(total > 1 ? `联合投稿：已拉黑 ${n}/${total} 位作者` : `已拉黑：${targets[0].name || targets[0].uid}`);
-            cb && cb(n > 0);
-          });
-        });
-        return;
-      }
-      if (uid) {
-        doBlacklist(uid, upName, cb);
-        return;
-      }
-      if (bvid) {
-        toast("正在解析该 UP 的 UID…");
-        resolveUidByBvid(bvid, (rid, rname) => {
-          if (rid) {
-            doBlacklist(rid, rname || upName, cb);
-          } else if (upName) {
-            addToList(CONFIG.block.upNames, upName);
-            toast(`未能解析 UID，已按 UP 名本地屏蔽：${upName}`);
-            cb && cb(false);
-          } else {
-            toast("未能解析该 UP，已跳过");
-            cb && cb(false);
-          }
-        });
-        return;
-      }
-      if (upName) {
-        addToList(CONFIG.block.upNames, upName);
-        toast(`该卡片没拿到 UID/BV，已按 UP 名本地屏蔽：${upName}`);
-      } else {
-        toast("该卡片信息不足，无法拉黑");
-      }
-      cb && cb(false);
     }
     let ctxMenuEl = null;
     function closeCtxMenu() {
@@ -3081,28 +3107,6 @@
     function refreshPanelIfOpen() {
       if (!isPanelOpen()) return;
       renderPanel(panelEl());
-    }
-    const HOTSEARCH_SELECTORS = [
-      ".trending",
-      ".search-panel .trending-list",
-      ".search-panel-popover .trending",
-      '.bili-header [class*="trending"]',
-      '.center-search-container [class*="trending"]',
-      '.search-panel [class*="trending"]',
-      '.history-panel [class*="trending"]'
-    ];
-    function applyHotSearchStyle() {
-      let st = document.getElementById("bfb-hotsearch-style");
-      if (CONFIG.hideHotSearch) {
-        if (!st) {
-          st = document.createElement("style");
-          st.id = "bfb-hotsearch-style";
-          document.head.appendChild(st);
-        }
-        st.textContent = HOTSEARCH_SELECTORS.join(",") + "{display:none !important}";
-      } else if (st) {
-        st.remove();
-      }
     }
     function start() {
       console.log(
