@@ -187,175 +187,182 @@
     return out;
   }
 
+  // src/config.ts
+  var DEFAULT_CONFIG = {
+    enabled: true,
+    reviewMode: false,
+    // 审查模式：被拦视频不删/不隐，而是标记+就地放行，便于核对防误伤
+    rightClickBlock: true,
+    cardHoverBtn: false,
+    // 悬停卡片时显示快捷「拉黑」浮层按钮（独立浮层，不改 B 站卡片 DOM）
+    fuzzyMatch: true,
+    // 反绕过：普通关键词匹配前剔除分隔符（“原 神/原.神”也命中）；隐形字符始终剔除
+    blacklistCollab: false,
+    // 拉黑联合投稿时，是否把所有合作者一并拉黑
+    block: {
+      keywords: [],
+      // 命中 标题/UP名/分区（纯本地，不联网；标签匹配请用 tags 维度）；普通词=包含，/.../ =正则
+      partitions: [],
+      // 视频分区(tname)黑名单；普通词=包含，/.../ =正则（网络拦截层最准）
+      upNames: [],
+      uids: [],
+      bvids: [],
+      minDuration: 0,
+      maxDuration: 0,
+      minViews: 0,
+      // 万；>0 时播放量低于此值的视频被拦
+      spamLikeRatio: 0,
+      // %；>0 时，点赞率(点赞/播放)低于此值且播放≥下方阈值的视频判为营销号/搬运号（仅 feed 有点赞数据时生效）
+      spamMinViews: 10,
+      // 万；营销号识别的最低播放门槛（避免冤枉小/新视频）
+      // —— 以下为需要读取接口数据的维度（仅在开启「精确过滤」后生效）——
+      tags: [],
+      // 视频标签黑名单（标题区看不到，需调接口；支持 /正则/）
+      dualTags: [],
+      // 双重标签，“原神+鸣潮” 形式，同时命中两组才拦（治引战）
+      upBio: []
+      // UP 简介关键词黑名单（支持 /正则/）
+    },
+    allow: { keywords: [], upNames: [], uids: [] },
+    hideAd: false,
+    hideLiveCard: false,
+    // 屏蔽信息流里的直播推荐卡（首页/动态里链向 live.bilibili.com 的卡）
+    hideHotSearch: false,
+    apiFilters: false,
+    // 精确过滤总开关（关闭时完全不联网）
+    hideCharging: false,
+    // 充电专属视频（API）
+    boostFeedLoad: false,
+    // 增大首页推荐每次请求的视频数（拦截层删项后仍保持信息流饱满）
+    // —— 评论区过滤（独立一套，读评论组件 __data；仅在有评论的页面生效）——
+    comment: {
+      enabled: false,
+      // 评论区过滤总开关（关=完全不处理评论）
+      keywords: [],
+      // 评论正文关键词黑名单（独立于视频关键词；支持 /正则/、作用域前缀无意义）
+      userNames: [],
+      // 评论用户名精确黑名单
+      userNameKeywords: [],
+      // 评论用户名昵称关键词黑名单（支持 /正则/）
+      minLevel: 0,
+      // 评论者等级低于此值则隐藏（0=不启用）
+      hideNoFace: false,
+      // 默认头像且非会员（小号/水军特征）
+      hideEmojiOnly: false,
+      // 纯表情/纯 @ 的空洞评论
+      hideCallOnly: false,
+      // 只含 @其他用户、无实质内容
+      hideAd: false,
+      // 带货/导流广告评论
+      hideCallBot: false,
+      // 召唤 AI 的评论
+      hideBot: false,
+      // AI 机器人发布的评论
+      allowUp: true,
+      // 白名单：UP 主本人的评论免过滤
+      allowPin: true,
+      // 白名单：置顶评论免过滤
+      allowMe: true,
+      // 白名单：自己发布/被 @ 的评论免过滤
+      collapse: true
+      // 命中后折叠为一行灰条（点击展开），而非直接隐藏
+    },
+    debug: false,
+    blockedCount: 0,
+    uidNames: {},
+    // uid -> UP 名 缓存（仅用于面板按名称展示；拉黑仍用 uid）
+    // 规则订阅：每条 { url, name, enabled }。拉取到的规则数据另存于 SUB_STORE_KEY 缓存（不进 config，不外传）
+    subscriptions: []
+  };
+  function deepMerge(base, override) {
+    for (const k of Object.keys(override || {})) {
+      if (UNSAFE_KEYS.has(k)) continue;
+      if (override[k] && typeof override[k] === "object" && !Array.isArray(override[k]) && typeof base[k] === "object") {
+        deepMerge(base[k], override[k]);
+      } else {
+        base[k] = override[k];
+      }
+    }
+    return base;
+  }
+  function loadConfig() {
+    const raw = GM_getValue(STORE_KEY, null);
+    if (!raw) return structuredClone(DEFAULT_CONFIG);
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return deepMerge(structuredClone(DEFAULT_CONFIG), parsed);
+    } catch (e) {
+      return structuredClone(DEFAULT_CONFIG);
+    }
+  }
+  var CONFIG = loadConfig();
+  function saveConfig() {
+    GM_setValue(STORE_KEY, JSON.stringify(CONFIG));
+  }
+  var saveTimer = null;
+  function scheduleSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveConfig, 1200);
+  }
+  var NON_PORTABLE = ["blockedCount", "uidNames", "enabled", "debug", "reviewMode", "subscriptions"];
+  function exportConfig() {
+    const c = structuredClone(CONFIG);
+    NON_PORTABLE.forEach((k) => delete c[k]);
+    return JSON.stringify({ app: "biliHoyoFairy", version: VERSION, config: c }, null, 2);
+  }
+  function mergeImport(base, inc) {
+    for (const k of Object.keys(inc || {})) {
+      if (UNSAFE_KEYS.has(k)) continue;
+      const v = inc[k];
+      if (Array.isArray(v)) {
+        if (!Array.isArray(base[k])) base[k] = [];
+        for (const it of v) if (!base[k].map(String).includes(String(it))) base[k].push(it);
+      } else if (v && typeof v === "object" && base[k] && typeof base[k] === "object") {
+        mergeImport(base[k], v);
+      } else {
+        base[k] = v;
+      }
+    }
+  }
+
+  // src/logging.ts
+  var BADGE2 = "color:#fff;background:#fb7299;padding:0 4px;border-radius:3px";
+  function log(...args) {
+    if (CONFIG.debug) console.log("%c[biliHoyoFairy]%c", BADGE2, "color:inherit", ...args);
+  }
+  function logErr(where, e) {
+    try {
+      console.warn(`%c[biliHoyoFairy]%c ${where}`, BADGE2, "color:#e74c3c", e);
+    } catch (_) {
+    }
+  }
+  function safe(where, fn) {
+    return function(...args) {
+      try {
+        return fn.apply(this, args);
+      } catch (e) {
+        logErr(where, e);
+        return void 0;
+      }
+    };
+  }
+
+  // src/presets.ts
+  var PRESET_LIBRARY = [
+    { cat: "游戏黑水", name: "库洛系(鸣潮/库洛)", desc: "鸣潮 / 库洛 / 战双 等相关词", rules: { keywords: ["库洛", "库洛游戏", "呜哇", "鸣潮", "战双", "战双帕弥什", "漂泊者", "漂泊神游", "寄生神游", "寄生社区"] } },
+    { cat: "引战", name: "引战话术", desc: "挑动对立的话术片段（已收敛正则、防误伤）", rules: { keywords: ["/接触wuwa后|大脑发生的异变/"] } },
+    { cat: "引战", name: "引战标签", desc: "抹黑 / 拉踩类标签（需开「精确过滤」才匹配标签）", rules: { tags: ["/米哈一儿|一哭|二抄|三自爆/"] } },
+    { cat: "标题党 / 营销", name: "标题党", desc: "震惊体 + 一口气看完", rules: { keywords: ["/(一口气|一次性|一天|分钟|分半|小时)(看完|带你看完|直接看完)/", "/震惊|竟然|万万没想到/"] } },
+    { cat: "标题党 / 营销", name: "营销号UP名", desc: "常见营销号账号名", rules: { keywords: ["今日话题", "话题酱", "今日知乎", "大型纪录片"] } },
+    { cat: "标题党 / 营销", name: "软传销", desc: "日入月入 / 为自己打工", rules: { keywords: ["/(日入|日赚|月入|月赚)\\d+/", "/(小时|内耗).+为自己打工/"] } },
+    { cat: "其它", name: "MBTI", rules: { keywords: ["/MBTI|[IE][SN][TF][JP]|I人|E人/"] } },
+    { cat: "其它", name: "梗视频", rules: { keywords: ["科目三", "猫meme", "/是什么梗|梗百科|大型[纪记]录片/"] } },
+    { cat: "其它", name: "含日语标题", rules: { keywords: ["/[ぁ-ヶ]/"] } }
+  ];
+
   // src/main.ts
   (function() {
     "use strict";
-    const BADGE = "color:#fff;background:#fb7299;padding:0 4px;border-radius:3px";
-    function log(...args) {
-      if (CONFIG.debug) console.log(`%c[biliHoyoFairy]%c`, BADGE, "color:inherit", ...args);
-    }
-    function logErr(where, e) {
-      try {
-        console.warn(`%c[biliHoyoFairy]%c ${where}`, BADGE, "color:#e74c3c", e);
-      } catch (_) {
-      }
-    }
-    function safe(where, fn) {
-      return function() {
-        try {
-          return fn.apply(this, arguments);
-        } catch (e) {
-          logErr(where, e);
-        }
-      };
-    }
-    const DEFAULT_CONFIG = {
-      enabled: true,
-      reviewMode: false,
-      // 审查模式：被拦视频不删/不隐，而是标记+就地放行，便于核对防误伤
-      rightClickBlock: true,
-      cardHoverBtn: false,
-      // 悬停卡片时显示快捷「拉黑」浮层按钮（独立浮层，不改 B 站卡片 DOM）
-      fuzzyMatch: true,
-      // 反绕过：普通关键词匹配前剔除分隔符（"原 神/原.神"也命中）；隐形字符始终剔除
-      blacklistCollab: false,
-      // 拉黑联合投稿时，是否把所有合作者一并拉黑
-      block: {
-        keywords: [],
-        // 命中 标题/UP名/分区（纯本地，不联网；标签匹配请用 tags 维度）；普通词=包含，/.../ =正则
-        partitions: [],
-        // 视频分区(tname)黑名单；普通词=包含，/.../ =正则（网络拦截层最准）
-        upNames: [],
-        uids: [],
-        bvids: [],
-        minDuration: 0,
-        maxDuration: 0,
-        minViews: 0,
-        // 万；>0 时播放量低于此值的视频被拦
-        spamLikeRatio: 0,
-        // %；>0 时，点赞率(点赞/播放)低于此值且播放≥下方阈值的视频判为营销号/搬运号（仅 feed 有点赞数据时生效）
-        spamMinViews: 10,
-        // 万；营销号识别的最低播放门槛（避免冤枉小/新视频）
-        // —— 以下为需要读取接口数据的维度（仅在开启「精确过滤」后生效）——
-        tags: [],
-        // 视频标签黑名单（标题区看不到，需调接口；支持 /正则/）
-        dualTags: [],
-        // 双重标签，"原神+鸣潮" 形式，同时命中两组才拦（治引战）
-        upBio: []
-        // UP 简介关键词黑名单（支持 /正则/）
-      },
-      allow: { keywords: [], upNames: [], uids: [] },
-      hideAd: false,
-      hideLiveCard: false,
-      // 屏蔽信息流里的直播推荐卡（首页/动态里链向 live.bilibili.com 的卡）
-      hideHotSearch: false,
-      apiFilters: false,
-      // 精确过滤总开关（关闭时完全不联网）
-      hideCharging: false,
-      // 充电专属视频（API）
-      boostFeedLoad: false,
-      // 增大首页推荐每次请求的视频数（拦截层删项后仍保持信息流饱满，借鉴 cleaner）
-      // —— 评论区过滤（独立一套，读评论组件 __data；仅在有评论的页面生效，借鉴 bilibili-cleaner）——
-      comment: {
-        enabled: false,
-        // 评论区过滤总开关（关=完全不处理评论）
-        keywords: [],
-        // 评论正文关键词黑名单（独立于视频关键词；支持 /正则/、作用域前缀无意义）
-        userNames: [],
-        // 评论用户名精确黑名单
-        userNameKeywords: [],
-        // 评论用户名昵称关键词黑名单（支持 /正则/）
-        minLevel: 0,
-        // 评论者等级低于此值则隐藏（0=不启用）
-        hideNoFace: false,
-        // 默认头像且非会员（小号/水军特征）
-        hideEmojiOnly: false,
-        // 纯表情/纯 @ 的空洞评论
-        hideCallOnly: false,
-        // 只含 @其他用户、无实质内容
-        hideAd: false,
-        // 带货/导流广告评论
-        hideCallBot: false,
-        // 召唤 AI 的评论
-        hideBot: false,
-        // AI 机器人发布的评论
-        allowUp: true,
-        // 白名单：UP 主本人的评论免过滤
-        allowPin: true,
-        // 白名单：置顶评论免过滤
-        allowMe: true,
-        // 白名单：自己发布/被 @ 的评论免过滤
-        collapse: true
-        // 命中后折叠为一行灰条（点击展开），而非直接隐藏
-      },
-      debug: false,
-      blockedCount: 0,
-      uidNames: {},
-      // uid -> UP 名 缓存（仅用于面板按名称展示；拉黑仍用 uid）
-      // 规则订阅：每条 { url, name, enabled }。拉取到的规则数据另存于 SUB_STORE_KEY 缓存（不进 config，不外传）
-      subscriptions: []
-    };
-    const PRESET_LIBRARY = [
-      { cat: "游戏黑水", name: "库洛系(鸣潮/库洛)", desc: "鸣潮 / 库洛 / 战双 等相关词", rules: { keywords: ["库洛", "库洛游戏", "呜哇", "鸣潮", "战双", "战双帕弥什", "漂泊者", "漂泊神游", "寄生神游", "寄生社区"] } },
-      { cat: "引战", name: "引战话术", desc: "挑动对立的话术片段（已收敛正则、防误伤）", rules: { keywords: ["/接触wuwa后|大脑发生的异变/"] } },
-      { cat: "引战", name: "引战标签", desc: "抹黑 / 拉踩类标签（需开「精确过滤」才匹配标签）", rules: { tags: ["/米哈一儿|一哭|二抄|三自爆/"] } },
-      { cat: "标题党 / 营销", name: "标题党", desc: "震惊体 + 一口气看完", rules: { keywords: ["/(一口气|一次性|一天|分钟|分半|小时)(看完|带你看完|直接看完)/", "/震惊|竟然|万万没想到/"] } },
-      { cat: "标题党 / 营销", name: "营销号UP名", desc: "常见营销号账号名", rules: { keywords: ["今日话题", "话题酱", "今日知乎", "大型纪录片"] } },
-      { cat: "标题党 / 营销", name: "软传销", desc: "日入月入 / 为自己打工", rules: { keywords: ["/(日入|日赚|月入|月赚)\\d+/", "/(小时|内耗).+为自己打工/"] } },
-      { cat: "其它", name: "MBTI", rules: { keywords: ["/MBTI|[IE][SN][TF][JP]|I人|E人/"] } },
-      { cat: "其它", name: "梗视频", rules: { keywords: ["科目三", "猫meme", "/是什么梗|梗百科|大型[纪记]录片/"] } },
-      { cat: "其它", name: "含日语标题", rules: { keywords: ["/[ぁ-ヶ]/"] } }
-    ];
-    function deepMerge(base, override) {
-      for (const k of Object.keys(override || {})) {
-        if (UNSAFE_KEYS.has(k)) continue;
-        if (override[k] && typeof override[k] === "object" && !Array.isArray(override[k]) && typeof base[k] === "object") {
-          deepMerge(base[k], override[k]);
-        } else {
-          base[k] = override[k];
-        }
-      }
-      return base;
-    }
-    function loadConfig() {
-      const raw = GM_getValue(STORE_KEY, null);
-      if (!raw) return structuredClone(DEFAULT_CONFIG);
-      try {
-        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-        return deepMerge(structuredClone(DEFAULT_CONFIG), parsed);
-      } catch (e) {
-        return structuredClone(DEFAULT_CONFIG);
-      }
-    }
-    function saveConfig() {
-      GM_setValue(STORE_KEY, JSON.stringify(CONFIG));
-    }
-    let saveTimer = null;
-    function scheduleSave() {
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(saveConfig, 1200);
-    }
-    const NON_PORTABLE = ["blockedCount", "uidNames", "enabled", "debug", "reviewMode", "subscriptions"];
-    function exportConfig() {
-      const c = structuredClone(CONFIG);
-      NON_PORTABLE.forEach((k) => delete c[k]);
-      return JSON.stringify({ app: "biliHoyoFairy", version: VERSION, config: c }, null, 2);
-    }
-    function mergeImport(base, inc) {
-      for (const k of Object.keys(inc || {})) {
-        if (UNSAFE_KEYS.has(k)) continue;
-        const v = inc[k];
-        if (Array.isArray(v)) {
-          if (!Array.isArray(base[k])) base[k] = [];
-          for (const it of v) if (!base[k].map(String).includes(String(it))) base[k].push(it);
-        } else if (v && typeof v === "object" && base[k] && typeof base[k] === "object") {
-          mergeImport(base[k], v);
-        } else {
-          base[k] = v;
-        }
-      }
-    }
-    const CONFIG = loadConfig();
     configureFuzzy(() => CONFIG.fuzzyMatch);
     let sessionBlocked = 0;
     const SUB_DIMS = ["uids", "upNames", "keywords", "partitions", "tags", "upBio", "bvids"];
