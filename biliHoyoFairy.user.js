@@ -1258,6 +1258,177 @@
     );
   }
 
+  // src/comments.ts
+  var CMT_TAGS = { "BILI-COMMENT-THREAD-RENDERER": false, "BILI-COMMENT-REPLY-RENDERER": true };
+  function cmtCleanMsg(msg, isSub) {
+    let s = (msg || "").toString();
+    if (isSub) s = s.replace(/^回复\s?@[^@\s:：]+\s?[:：]/, "");
+    return s.replace(/@[^@\s]+/g, " ").replace(/(\[[^[\]]+\])+/g, " ").trim();
+  }
+  var EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u200d\u{20E3}]/gu;
+  function readCmt2(host) {
+    const d = host && host.__data || {};
+    const member = d.member || {};
+    const content = d.content || {};
+    const lv = member.level_info && member.level_info.current_level;
+    const vipStatus = member.vip && member.vip.vipStatus;
+    return {
+      uname: ((member.uname || "") + "").trim(),
+      mid: d.mid,
+      level: typeof lv === "number" ? lv : null,
+      noface: (member.avatar || "").endsWith("noface.jpg") && (vipStatus === 0 || vipStatus == null),
+      message: (content.message || "") + "",
+      members: Array.isArray(content.members) ? content.members : [],
+      isUpTop: !!(d.reply_control && d.reply_control.is_up_top),
+      upMid: host.__upMid,
+      // B 站组件挂的视频 UP mid（可能缺，缺则 isUp 白名单不生效）
+      me: host.__user && host.__user.uname
+      // 当前登录用户名（可能缺）
+    };
+  }
+  function matchComment(c, isSub) {
+    const cc = CONFIG.comment;
+    if (cc.allowUp && c.upMid != null && c.mid != null && String(c.mid) === String(c.upMid)) return null;
+    if (cc.allowPin && !isSub && c.isUpTop) return null;
+    if (cc.allowMe && c.me && (c.uname === c.me || c.message.includes("@" + c.me))) return null;
+    if (c.uname && M.cmtUserSet.has(lc(c.uname))) return "评论用户:" + c.uname;
+    if (c.uname && textHit(c.uname, M.cmtUserKw)) return "评论昵称词";
+    const clean = cmtCleanMsg(c.message, isSub);
+    if (textHit(clean, M.cmtKw)) return "评论关键词";
+    if (cc.minLevel > 0 && c.level != null && c.level < cc.minLevel) return `评论等级<${cc.minLevel}`;
+    if (cc.hideNoFace && c.noface) return "默认头像非会员";
+    if (cc.hideBot && c.uname && COMMENT_BOTS.has(c.uname)) return "AI机器人";
+    if (cc.hideCallBot && c.members.some((m) => m && COMMENT_BOTS.has(m.uname))) return "召唤AI";
+    if (cc.hideAd && COMMENT_AD_RE.test(c.message)) return "带货评论";
+    if (cc.hideCallOnly && c.message.replace(/@[^@\s]+/g, " ").trim() === "") return "纯@评论";
+    if (cc.hideEmojiOnly && clean.replace(EMOJI_RE, "").trim() === "") return "纯表情评论";
+    return null;
+  }
+  function collapseComment(host, reason) {
+    if (host.__bfbCmtPh && host.__bfbCmtPh.isConnected) {
+      const t = host.__bfbCmtPh.querySelector(".bfb-ph-txt");
+      if (t) t.textContent = "已折叠 · 命中：" + reason;
+      return;
+    }
+    const parent = host.parentNode;
+    if (!parent) {
+      host.style.setProperty("display", "none", "important");
+      return;
+    }
+    const ph = document.createElement("div");
+    ph.className = "bfb-cmt-ph";
+    ph.style.cssText = "display:flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border-radius:8px;background:rgba(251,114,153,.08);border:1px dashed rgba(251,114,153,.45);font-size:12px;color:#9499a0;cursor:pointer;user-select:none;line-height:1.5";
+    ph.innerHTML = '<span class="bfb-ph-txt" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">已折叠 · 命中：' + String(reason).replace(/[<>&]/g, "") + '</span><span style="color:#fb7299;flex:none">点击展开 ▾</span>';
+    ph.addEventListener("click", function() {
+      ph.remove();
+      host.style.removeProperty("display");
+      host.__bfbCmtPh = null;
+      host.__bfbCmtExpanded = true;
+    });
+    parent.insertBefore(ph, host);
+    host.__bfbCmtPh = ph;
+    host.style.setProperty("display", "none", "important");
+  }
+  function removeCmtPlaceholder(host) {
+    if (host.__bfbCmtPh) {
+      try {
+        host.__bfbCmtPh.remove();
+      } catch (e) {
+      }
+      host.__bfbCmtPh = null;
+    }
+  }
+  var processComment = safe("processComment", function(host, isSub) {
+    if (host.__bfbCmtV === ruleVersion) return;
+    host.__bfbCmtV = ruleVersion;
+    const c = readCmt2(host);
+    if (!c.uname && !c.message) return;
+    const reason = matchComment(c, isSub);
+    if (reason) {
+      if (CONFIG.reviewMode) {
+        removeCmtPlaceholder(host);
+        host.style.setProperty("outline", "2px solid #fb7299", "important");
+        host.title = "[biliHoyoFairy] 命中：" + reason;
+        host.style.removeProperty("display");
+      } else if (CONFIG.comment.collapse && !host.__bfbCmtExpanded) {
+        collapseComment(host, reason);
+      } else if (host.__bfbCmtExpanded) {
+        removeCmtPlaceholder(host);
+        host.style.removeProperty("display");
+      } else {
+        removeCmtPlaceholder(host);
+        host.style.setProperty("display", "none", "important");
+      }
+      if (!host.__bfbCmtHit) {
+        host.__bfbCmtHit = true;
+        recordBlock(reason, { up: c.uname, title: cmtCleanMsg(c.message, isSub).slice(0, 40) }, "CMT");
+      }
+    } else {
+      removeCmtPlaceholder(host);
+      host.style.removeProperty("display");
+      host.style.removeProperty("outline");
+      host.removeAttribute("title");
+      host.__bfbCmtHit = false;
+      host.__bfbCmtExpanded = false;
+    }
+  });
+  function revertComments() {
+    for (const root of shadowRoots) {
+      const host = root && root.host;
+      if (!host || CMT_TAGS[host.tagName] === void 0) continue;
+      if (host.__bfbCmtHit || host.__bfbCmtPh || host.style.display === "none" || host.style.outline) {
+        removeCmtPlaceholder(host);
+        host.style.removeProperty("display");
+        host.style.removeProperty("outline");
+        host.removeAttribute("title");
+        host.__bfbCmtHit = false;
+        host.__bfbCmtExpanded = false;
+        host.__bfbCmtV = void 0;
+      }
+    }
+  }
+  var lastCmtDiag = "";
+  function scanComments() {
+    if (!CONFIG.enabled || !CONFIG.comment.enabled) {
+      revertComments();
+      return;
+    }
+    let cmtHosts = 0;
+    for (const root of shadowRoots) {
+      const host = root && root.host;
+      if (!host) continue;
+      if (!host.isConnected) {
+        shadowRoots.delete(root);
+        continue;
+      }
+      const isSub = CMT_TAGS[host.tagName];
+      if (isSub === void 0) continue;
+      cmtHosts++;
+      processComment(host, isSub);
+    }
+    if (CONFIG.debug) {
+      const tags = {};
+      for (const r of shadowRoots) {
+        const h = r && r.host;
+        if (h && h.tagName) tags[h.tagName] = (tags[h.tagName] || 0) + 1;
+      }
+      const sig = JSON.stringify(tags);
+      if (sig !== lastCmtDiag) {
+        lastCmtDiag = sig;
+        log(`评论诊断｜shadowRoot 总数=${shadowRoots.size}｜评论宿主=${cmtHosts}｜各标签计数=`, tags);
+      }
+    }
+  }
+  var cmtTimer = null;
+  function scheduleCommentScan() {
+    if (!CONFIG.comment.enabled) return;
+    if (cmtTimer) return;
+    cmtTimer = setTimeout(() => {
+      cmtTimer = null;
+      scanComments();
+    }, 300);
+  }
+
   // src/main.ts
   (function() {
     "use strict";
@@ -1433,175 +1604,6 @@
       });
       scanAll();
       scanComments();
-    }
-    const CMT_TAGS = { "BILI-COMMENT-THREAD-RENDERER": false, "BILI-COMMENT-REPLY-RENDERER": true };
-    function cmtCleanMsg(msg, isSub) {
-      let s = (msg || "").toString();
-      if (isSub) s = s.replace(/^回复\s?@[^@\s:：]+\s?[:：]/, "");
-      return s.replace(/@[^@\s]+/g, " ").replace(/(\[[^[\]]+\])+/g, " ").trim();
-    }
-    const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u200d\u{20E3}]/gu;
-    function readCmt(host) {
-      const d = host && host.__data || {};
-      const member = d.member || {};
-      const content = d.content || {};
-      const lv = member.level_info && member.level_info.current_level;
-      const vipStatus = member.vip && member.vip.vipStatus;
-      return {
-        uname: ((member.uname || "") + "").trim(),
-        mid: d.mid,
-        level: typeof lv === "number" ? lv : null,
-        noface: (member.avatar || "").endsWith("noface.jpg") && (vipStatus === 0 || vipStatus == null),
-        message: (content.message || "") + "",
-        members: Array.isArray(content.members) ? content.members : [],
-        isUpTop: !!(d.reply_control && d.reply_control.is_up_top),
-        upMid: host.__upMid,
-        // B 站组件挂的视频 UP mid（可能缺，缺则 isUp 白名单不生效）
-        me: host.__user && host.__user.uname
-        // 当前登录用户名（可能缺）
-      };
-    }
-    function matchComment(c, isSub) {
-      const cc = CONFIG.comment;
-      if (cc.allowUp && c.upMid != null && c.mid != null && String(c.mid) === String(c.upMid)) return null;
-      if (cc.allowPin && !isSub && c.isUpTop) return null;
-      if (cc.allowMe && c.me && (c.uname === c.me || c.message.includes("@" + c.me))) return null;
-      if (c.uname && M.cmtUserSet.has(lc(c.uname))) return "评论用户:" + c.uname;
-      if (c.uname && textHit(c.uname, M.cmtUserKw)) return "评论昵称词";
-      const clean = cmtCleanMsg(c.message, isSub);
-      if (textHit(clean, M.cmtKw)) return "评论关键词";
-      if (cc.minLevel > 0 && c.level != null && c.level < cc.minLevel) return `评论等级<${cc.minLevel}`;
-      if (cc.hideNoFace && c.noface) return "默认头像非会员";
-      if (cc.hideBot && c.uname && COMMENT_BOTS.has(c.uname)) return "AI机器人";
-      if (cc.hideCallBot && c.members.some((m) => m && COMMENT_BOTS.has(m.uname))) return "召唤AI";
-      if (cc.hideAd && COMMENT_AD_RE.test(c.message)) return "带货评论";
-      if (cc.hideCallOnly && c.message.replace(/@[^@\s]+/g, " ").trim() === "") return "纯@评论";
-      if (cc.hideEmojiOnly && clean.replace(EMOJI_RE, "").trim() === "") return "纯表情评论";
-      return null;
-    }
-    function collapseComment(host, reason) {
-      if (host.__bfbCmtPh && host.__bfbCmtPh.isConnected) {
-        const t = host.__bfbCmtPh.querySelector(".bfb-ph-txt");
-        if (t) t.textContent = "已折叠 · 命中：" + reason;
-        return;
-      }
-      const parent = host.parentNode;
-      if (!parent) {
-        host.style.setProperty("display", "none", "important");
-        return;
-      }
-      const ph = document.createElement("div");
-      ph.className = "bfb-cmt-ph";
-      ph.style.cssText = "display:flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border-radius:8px;background:rgba(251,114,153,.08);border:1px dashed rgba(251,114,153,.45);font-size:12px;color:#9499a0;cursor:pointer;user-select:none;line-height:1.5";
-      ph.innerHTML = '<span class="bfb-ph-txt" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">已折叠 · 命中：' + String(reason).replace(/[<>&]/g, "") + '</span><span style="color:#fb7299;flex:none">点击展开 ▾</span>';
-      ph.addEventListener("click", function() {
-        ph.remove();
-        host.style.removeProperty("display");
-        host.__bfbCmtPh = null;
-        host.__bfbCmtExpanded = true;
-      });
-      parent.insertBefore(ph, host);
-      host.__bfbCmtPh = ph;
-      host.style.setProperty("display", "none", "important");
-    }
-    function removeCmtPlaceholder(host) {
-      if (host.__bfbCmtPh) {
-        try {
-          host.__bfbCmtPh.remove();
-        } catch (e) {
-        }
-        host.__bfbCmtPh = null;
-      }
-    }
-    const processComment = safe("processComment", function(host, isSub) {
-      if (host.__bfbCmtV === ruleVersion) return;
-      host.__bfbCmtV = ruleVersion;
-      const c = readCmt(host);
-      if (!c.uname && !c.message) return;
-      const reason = matchComment(c, isSub);
-      if (reason) {
-        if (CONFIG.reviewMode) {
-          removeCmtPlaceholder(host);
-          host.style.setProperty("outline", "2px solid #fb7299", "important");
-          host.title = "[biliHoyoFairy] 命中：" + reason;
-          host.style.removeProperty("display");
-        } else if (CONFIG.comment.collapse && !host.__bfbCmtExpanded) {
-          collapseComment(host, reason);
-        } else if (host.__bfbCmtExpanded) {
-          removeCmtPlaceholder(host);
-          host.style.removeProperty("display");
-        } else {
-          removeCmtPlaceholder(host);
-          host.style.setProperty("display", "none", "important");
-        }
-        if (!host.__bfbCmtHit) {
-          host.__bfbCmtHit = true;
-          recordBlock(reason, { up: c.uname, title: cmtCleanMsg(c.message, isSub).slice(0, 40) }, "CMT");
-        }
-      } else {
-        removeCmtPlaceholder(host);
-        host.style.removeProperty("display");
-        host.style.removeProperty("outline");
-        host.removeAttribute("title");
-        host.__bfbCmtHit = false;
-        host.__bfbCmtExpanded = false;
-      }
-    });
-    function revertComments() {
-      for (const root of shadowRoots) {
-        const host = root && root.host;
-        if (!host || CMT_TAGS[host.tagName] === void 0) continue;
-        if (host.__bfbCmtHit || host.__bfbCmtPh || host.style.display === "none" || host.style.outline) {
-          removeCmtPlaceholder(host);
-          host.style.removeProperty("display");
-          host.style.removeProperty("outline");
-          host.removeAttribute("title");
-          host.__bfbCmtHit = false;
-          host.__bfbCmtExpanded = false;
-          host.__bfbCmtV = void 0;
-        }
-      }
-    }
-    let lastCmtDiag = "";
-    function scanComments() {
-      if (!CONFIG.enabled || !CONFIG.comment.enabled) {
-        revertComments();
-        return;
-      }
-      let cmtHosts = 0;
-      for (const root of shadowRoots) {
-        const host = root && root.host;
-        if (!host) continue;
-        if (!host.isConnected) {
-          shadowRoots.delete(root);
-          continue;
-        }
-        const isSub = CMT_TAGS[host.tagName];
-        if (isSub === void 0) continue;
-        cmtHosts++;
-        processComment(host, isSub);
-      }
-      if (CONFIG.debug) {
-        const tags = {};
-        for (const r of shadowRoots) {
-          const h = r && r.host;
-          if (h && h.tagName) tags[h.tagName] = (tags[h.tagName] || 0) + 1;
-        }
-        const sig = JSON.stringify(tags);
-        if (sig !== lastCmtDiag) {
-          lastCmtDiag = sig;
-          log(`评论诊断｜shadowRoot 总数=${shadowRoots.size}｜评论宿主=${cmtHosts}｜各标签计数=`, tags);
-        }
-      }
-    }
-    let cmtTimer = null;
-    function scheduleCommentScan() {
-      if (!CONFIG.comment.enabled) return;
-      if (cmtTimer) return;
-      cmtTimer = setTimeout(() => {
-        cmtTimer = null;
-        scanComments();
-      }, 300);
     }
     function resolveUidByBvid(bvid, cb) {
       fetchView(bvid, (d) => {
