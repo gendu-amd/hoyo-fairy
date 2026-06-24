@@ -14,6 +14,20 @@ export function addToList(arr: string[], value: unknown): boolean {
   return true;
 }
 
+// 纯去重追加：把已归一的字符串值逐个加进 arr（已存在则跳过），返回新增条数。
+// 不存盘、不触发重扫——供批量场景（名单批处理、预置库）在最后统一存盘+重扫，避免逐条重扫。
+export function pushUnique(arr: string[], values: readonly string[]): number {
+  let n = 0;
+  for (const v of values) {
+    const s = String(v);
+    if (!arr.map(String).includes(s)) {
+      arr.push(s);
+      n++;
+    }
+  }
+  return n;
+}
+
 // 从规则数组移除一条（存在才动作）。
 export function removeFromList(arr: string[], value: unknown): void {
   const i = arr.map(String).indexOf(String(value));

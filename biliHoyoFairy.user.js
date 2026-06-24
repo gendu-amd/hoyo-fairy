@@ -1432,6 +1432,17 @@
     emitRulesChanged();
     return true;
   }
+  function pushUnique(arr, values) {
+    let n = 0;
+    for (const v of values) {
+      const s = String(v);
+      if (!arr.map(String).includes(s)) {
+        arr.push(s);
+        n++;
+      }
+    }
+    return n;
+  }
   function removeFromList(arr, value) {
     const i = arr.map(String).indexOf(String(value));
     if (i >= 0) {
@@ -1979,6 +1990,31 @@
     { cat: "其它", name: "梗视频", rules: { keywords: ["科目三", "猫meme", "/是什么梗|梗百科|大型[纪记]录片/"] } },
     { cat: "其它", name: "含日语标题", rules: { keywords: ["/[ぁ-ヶ]/"] } }
   ];
+
+  // src/batch.ts
+  function parseNameList(raw) {
+    const uids = [];
+    const names = [];
+    const seen = /* @__PURE__ */ new Set();
+    const addUid = (u) => {
+      if (!seen.has(u)) {
+        seen.add(u);
+        uids.push(u);
+      }
+    };
+    String(raw || "").split(/[\s,，;；、]+/).forEach((tok) => {
+      const t = (tok || "").trim();
+      if (!t || t[0] === "!" || t[0] === "#") return;
+      let m;
+      if (m = t.match(/^uid:\s*(\d+)$/i)) addUid(m[1]);
+      else if (m = t.match(/^up:\s*(.+)$/i)) {
+        const nm = m[1].trim();
+        if (nm) names.push(nm);
+      } else if (/^\d{3,}$/.test(t)) addUid(t);
+      else names.push(t);
+    });
+    return { uids, names };
+  }
 
   // src/ui/field.ts
   var collapseState = {};
@@ -2561,13 +2597,7 @@
       for (const dim of Object.keys(p2.rules || {})) {
         const arr = CONFIG.block[dim];
         if (!Array.isArray(arr)) continue;
-        for (const v of p2.rules[dim]) {
-          const s = String(v).trim();
-          if (s && !arr.map(String).includes(s)) {
-            arr.push(s);
-            n++;
-          }
-        }
+        n += pushUnique(arr, p2.rules[dim].map((v) => String(v).trim()).filter(Boolean));
       }
       if (n) {
         saveConfig();
@@ -2849,39 +2879,9 @@
     G.tools.insertBefore(listSec, subSec);
     const listTa = listSec.querySelector("#bfb-list-input");
     const listStatus = listSec.querySelector("#bfb-list-status");
-    const parseList = () => {
-      const uids = [];
-      const names = [];
-      const seen = /* @__PURE__ */ new Set();
-      const addUid = (u) => {
-        if (!seen.has(u)) {
-          seen.add(u);
-          uids.push(u);
-        }
-      };
-      String(listTa.value || "").split(/[\s,，;；、]+/).forEach((tok) => {
-        const t = (tok || "").trim();
-        if (!t || t[0] === "!" || t[0] === "#") return;
-        let m;
-        if (m = t.match(/^uid:\s*(\d+)$/i)) addUid(m[1]);
-        else if (m = t.match(/^up:\s*(.+)$/i)) {
-          const nm = m[1].trim();
-          if (nm) names.push(nm);
-        } else if (/^\d{3,}$/.test(t)) addUid(t);
-        else names.push(t);
-      });
-      return { uids, names };
-    };
+    const parseList = () => parseNameList(listTa.value);
     const addLocalMany = (uids, names) => {
-      let n = 0;
-      const push = (arr, v) => {
-        if (!arr.map(String).includes(String(v))) {
-          arr.push(String(v));
-          n++;
-        }
-      };
-      uids.forEach((u) => push(CONFIG.block.uids, u));
-      names.forEach((nm) => push(CONFIG.block.upNames, nm));
+      const n = pushUnique(CONFIG.block.uids, uids) + pushUnique(CONFIG.block.upNames, names);
       if (n) {
         saveConfig();
         rescanAfterRuleChange();
