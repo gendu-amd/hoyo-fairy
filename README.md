@@ -1,5 +1,6 @@
-# biliHoyoFairy · 抗击黑潮
+# biliHoyoFairy · 抗击黑潮 — B站推荐流净化 / 屏蔽拉黑脚本
 
+> bilibili（B站 / 哔哩哔哩）推荐流净化与屏蔽脚本：屏蔽黑流量、引战、广告与不想看的 UP。
 > 凯撒命你兵分五路抗击黑潮，此乃其一。
 
 [![Install](https://img.shields.io/badge/Tampermonkey-一键安装-fb7299)](https://raw.githubusercontent.com/gendu-amd/biliHoyoFairy/main/biliHoyoFairy.user.js)
