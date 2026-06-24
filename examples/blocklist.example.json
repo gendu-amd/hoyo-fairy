@@ -3,7 +3,7 @@
   "format": 1,
   "meta": {
     "title": "抗黑潮公共名单（示例）",
-    "description": "biliHoyoFairy 规则订阅示例。把本文件托管到公开 URL（GitHub raw / Gist raw），在「工具 → 规则订阅」填入即可；可同时订阅多份，规则自动合并去重。正则 /.../：keywords / partitions / tags / upBio 支持；upNames / uids / bvids 为精确匹配。",
+    "description": "biliHoyoFairy 规则订阅示例。托管到公开 URL（GitHub raw / Gist raw），在「工具 → 规则订阅」填入即可，可同时订阅多份并自动合并去重。仿照本文件替换 rules 各维度内容即可新增名单。下方 7 类即订阅支持的全部维度：uids、upNames、keywords、partitions、tags、upBio、bvids（播放量/时长等数值阈值、白名单、开关不可订阅，仅并入黑名单）。正则 /.../ 仅 keywords / partitions / tags / upBio 支持，upNames / uids / bvids 为精确匹配。tags 与 upBio 属联网维度，订阅者需开启「精确过滤」才生效。",
     "version": "2026.06.19",
     "expires": "1d",
     "homepage": "https://github.com/gendu-amd/biliHoyoFairy",
