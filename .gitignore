@@ -2,8 +2,10 @@
 reference/
 local/
 
-# 依赖（如将来引入构建）
+# 依赖与构建缓存（产物 biliHoyoFairy.user.js 仍随仓库提交）
 node_modules/
+coverage/
+*.tsbuildinfo
 
 # 系统 / 编辑器
 .DS_Store
