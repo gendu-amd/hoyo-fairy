@@ -2091,7 +2091,7 @@
     }
     if (info.up) {
       items.push({
-        label: `🚫 屏蔽UP「${info.up}」`,
+        label: `🚫 屏蔽 UP「${info.up}」`,
         act: () => {
           if (info.uid) addToList(CONFIG.block.uids, info.uid);
           else addToList(CONFIG.block.upNames, info.up);
@@ -2100,7 +2100,7 @@
         }
       });
       items.push({
-        label: `⛔ 拉黑UP「${info.up}」(同步账号黑名单)`,
+        label: `⛔ 拉黑 UP「${info.up}」（同步账号黑名单）`,
         act: () => {
           confirmBlacklist(info.up).then((ok) => {
             if (ok) blacklistUp(info, refreshPanelIfOpen, card);
@@ -2108,7 +2108,7 @@
         }
       });
       items.push({
-        label: `⭐ 加白名单(永不屏蔽此UP)`,
+        label: `⭐ 加入白名单（永不屏蔽此 UP）`,
         act: () => {
           addToList(CONFIG.allow.upNames, info.up);
           toast(`已加入白名单：${info.up}`);
@@ -2118,7 +2118,7 @@
     }
     if (info.bvid) {
       items.push({
-        label: `🚫 屏蔽此视频 (${info.bvid})`,
+        label: `🚫 屏蔽此视频（${info.bvid}）`,
         act: () => {
           addToList(CONFIG.block.bvids, info.bvid);
           toast(`已屏蔽视频：${info.bvid}`);
@@ -2564,6 +2564,8 @@
     .bfb-modal-input{display:block;width:calc(100% - 32px);margin:0 16px 12px;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;box-sizing:border-box;background:#fff;color:#222}
     .bfb-modal-input:focus{outline:none;border-color:#fb7299;box-shadow:0 0 0 2px rgba(251,114,153,.18)}
     #bfb-panel .bfb-sub-row{border:1px solid #eee;border-radius:8px;padding:8px;margin-top:6px;background:#fafafa}
+    #bfb-panel .bfb-sub-url{font-size:11px;color:#6e6e6e;word-break:break-all;margin-top:4px}
+    #bfb-panel .bfb-sub-status{font-size:11px;color:#6e6e6e;margin-top:4px}
     #bfb-panel .bfb-listta{width:100%;box-sizing:border-box;resize:vertical;font-family:monospace;font-size:12px;padding:6px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#222}
     #bfb-panel{position:fixed;top:0;right:0;width:400px;max-width:94vw;height:100vh;z-index:100000;background:#fff;box-shadow:-4px 0 24px rgba(0,0,0,.2);overflow:auto;overscroll-behavior:contain;font-family:system-ui,Arial;transform:translateX(100%);transition:transform .25s}
     #bfb-panel.open{transform:translateX(0)}
@@ -2663,6 +2665,7 @@
       #bfb-panel .hint,#bfb-panel .stat,#bfb-panel .grp-tip{color:#8a8a92}
       #bfb-panel .grp-tip{background:#232328;border-bottom-color:#2c2c32}
       #bfb-panel .bfb-sub-row{background:#232328;border-color:#34343a}
+      #bfb-panel .bfb-sub-url,#bfb-panel .bfb-sub-status{color:#9a9aa2}
       #bfb-panel .bfb-listta{background:#26262b;color:#e6e6e9;border-color:#44444c}
       .bfb-modal-input{background:#26262b;color:#e6e6e9;border-color:#44444c}
       #bfb-panel .empty{color:#9a9aa2}
@@ -2718,25 +2721,25 @@
   }
   var PANEL_TABS = [
     ["base", "⚙ 基础", "常规开关与卡片类型过滤"],
-    ["black", "🚫 黑名单", "按标题 / UP主 / 分区屏蔽，即时生效。规则用 /.../ 包裹表示正则（如 /震惊.*竟然/），否则按关键词包含匹配（不分大小写）"],
-    ["api", "🛰 进阶", "播放量、时长，以及标签 / 数据等更细致的过滤（标签类需开启下方的「精确过滤」）"],
-    ["comment", "💬 评论", "过滤视频/动态评论区的引战、水军、营销与 AI 评论（读评论数据隐藏，仅在有评论的页面生效；与视频规则相互独立）"],
+    ["black", "🚫 黑名单", "按标题、UP 主、分区屏蔽，即时生效；以 /.../ 包裹表示正则（如 /震惊.*竟然/），否则为关键词包含匹配（不区分大小写）"],
+    ["api", "🛰 进阶", "按播放量、时长，以及标签、数据等维度精细过滤（标签类维度需开启下方「精确过滤」）"],
+    ["comment", "💬 评论", "过滤视频与动态评论区的引战、水军、营销及 AI 评论（基于评论数据隐藏，仅在含评论的页面生效，与视频规则相互独立）"],
     ["allow", "⭐ 白名单", "命中白名单的内容永不隐藏，优先级最高"],
-    ["tools", "🧰 工具", "预置库 / 重置 / 屏蔽记录"]
+    ["tools", "🧰 工具", "预置库、重置、屏蔽记录"]
   ];
   var BLACK_FIELDS = [
-    { key: "keywords", label: "🎯 关键词", placeholder: "如：原神 或 /震惊.*竟然/", hint: "一次命中 标题 / UP主名 / 分区（纯本地、免联网）。普通词=包含即拦；/.../ 包裹=正则，如 /一口气.*看完/。可加作用域前缀只匹配某字段：title:词 / up:词 / part:词（如 up:营销号 只按 UP 名拦）。想按视频标签拦截请用下方「视频标签」（需开精确过滤）。" },
+    { key: "keywords", label: "🎯 关键词", placeholder: "如：原神 或 /震惊.*竟然/", hint: "匹配标题、UP 主名、分区任一即拦截（纯本地，无需联网）。普通词为包含匹配，以 /.../ 包裹为正则，如 /一口气.*看完/。可加作用域前缀只匹配指定字段：title:词、up:词、part:词（如 up:营销号 仅按 UP 主名拦截）。如需按视频标签拦截，请使用下方「视频标签」（需开启精确过滤）。" },
     { kind: "up", label: "UP 主", hint: "输入 UP 名 或 UID（纯数字自动识别为 UID）；可一次粘贴多条，用逗号或换行分隔。" },
     { key: "bvids", label: "BV 号", placeholder: "如：BV1xx411c7XX", hint: "按视频 BV 号精确屏蔽单个视频。" },
-    { key: "partitions", label: "视频分区", placeholder: "如：资讯 或 /综艺|娱乐/", hint: "按视频分区(tname)屏蔽，网络拦截层最准。普通词=包含即拦；/.../ 包裹=正则。" }
+    { key: "partitions", label: "视频分区", placeholder: "如：资讯 或 /综艺|娱乐/", hint: "按视频分区（tname）屏蔽，网络拦截层判定最准。普通词为包含匹配，以 /.../ 包裹为正则。" }
   ];
   var API_CHIP_FIELDS = [
-    { key: "tags", label: "视频标签", placeholder: "如：原神 或 /鬼畜|二创/", hint: "匹配视频的完整标签(tag)，需开启上方「精确过滤」。普通词=包含即拦；/.../ 包裹=正则。" },
+    { key: "tags", label: "视频标签", placeholder: "如：原神 或 /鬼畜|二创/", hint: "匹配视频的完整标签（tag），需开启上方「精确过滤」。普通词为包含匹配，以 /.../ 包裹为正则。" },
     { key: "dualTags", label: "组合标签", placeholder: "如：原神 鸣潮（空格分隔）", groupMode: true, hint: "同时含这一组里所有标签才屏蔽，专治对立引战内容；需开启「精确过滤」。" },
     { key: "upBio", label: "UP 简介关键词", placeholder: "如：商务合作", hint: "匹配 UP 主个人简介，需开启「精确过滤」。" }
   ];
   var ALLOW_FIELDS = [
-    { scope: "allow", key: "keywords", label: "关键词", placeholder: "喜欢的题材", hint: "命中即永不隐藏（优先级最高）。作用于 视频标题 与 UP 主名；普通词=包含，/.../ =正则。" },
+    { scope: "allow", key: "keywords", label: "关键词", placeholder: "喜欢的题材", hint: "命中即永不隐藏（优先级最高）。作用于视频标题与 UP 主名；普通词为包含匹配，/.../ 为正则。" },
     { scope: "allow", key: "upNames", label: "UP 主名", placeholder: "喜欢的 UP 主名", hint: "该 UP 的视频永不隐藏（按名称精确匹配）。" },
     { scope: "allow", key: "uids", label: "UID", placeholder: "喜欢的 UP 的 UID（纯数字）", hint: "该 UP 的视频永不隐藏（按 UID 精确匹配，最可靠）。" }
   ];
@@ -2785,13 +2788,13 @@
     sw.className = "sec";
     sw.innerHTML = `
       <div class="switch"><input type="checkbox" id="bfb-enabled"> 启用拦截</div>
-      <div class="switch"><input type="checkbox" id="bfb-review"> 🔍 审查模式（不隐藏，标记被拦视频+就地放行，便于核对）</div>
-      <div class="switch"><input type="checkbox" id="bfb-rclick"> 右键卡片弹菜单（屏蔽/拉黑/加白名单）</div>
+      <div class="switch"><input type="checkbox" id="bfb-review"> 🔍 审查模式（不隐藏，仅标记被拦视频并提供就地放行，便于核对）</div>
+      <div class="switch"><input type="checkbox" id="bfb-rclick"> 右键卡片弹出菜单（屏蔽、拉黑、加入白名单）</div>
       <div class="switch"><input type="checkbox" id="bfb-hoverbtn"> 悬停卡片显示快捷「拉黑」按钮</div>
       <div class="switch"><input type="checkbox" id="bfb-collab"> 联合投稿一并拉黑合作者</div>
-      <div class="switch"><input type="checkbox" id="bfb-fuzzy"> 反绕过模糊匹配（"原 神 / 原.神" 也拦；隐形字符始终拦）</div>
-      <div class="switch"><input type="checkbox" id="bfb-debug"> 调试模式（控制台逐卡打印拦/放原因）</div>
-      <div class="hint">所有开关与规则均<b>即时生效</b>，无需保存。<b>审查模式</b>切换后建议<b>刷新页面</b>以核对完整结果。真正“从推荐流消失”请用<b>拉黑</b>。</div>`;
+      <div class="switch"><input type="checkbox" id="bfb-fuzzy"> 反绕过模糊匹配（「原 神」「原.神」同样拦截；隐形字符始终拦截）</div>
+      <div class="switch"><input type="checkbox" id="bfb-debug"> 调试模式（控制台逐卡打印拦截 / 放行原因）</div>
+      <div class="hint">所有开关与规则均<b>即时生效</b>，无需保存。切换<b>审查模式</b>后建议<b>刷新页面</b>以核对完整结果。如需让视频真正从推荐流中消失，请使用<b>拉黑</b>。</div>`;
     G.base.appendChild(sw);
     bindControl(sw, "bfb-enabled", CONFIG, "enabled", {
       after: () => {
@@ -2809,10 +2812,10 @@
     ct.className = "sec";
     ct.innerHTML = `
       <label>卡片类型过滤</label>
-      <div class="switch"><input type="checkbox" id="bfb-ad"> 屏蔽广告/推广卡片</div>
-      <div class="switch"><input type="checkbox" id="bfb-live"> 屏蔽信息流里的直播推荐卡</div>
+      <div class="switch"><input type="checkbox" id="bfb-ad"> 屏蔽广告 / 推广卡片</div>
+      <div class="switch"><input type="checkbox" id="bfb-live"> 屏蔽信息流中的直播推荐卡</div>
       <div class="switch"><input type="checkbox" id="bfb-hotsearch"> 屏蔽搜索框热搜词</div>
-      <div class="hint">广告为自动识别，偶有误差；可在下方「屏蔽记录」核对实际拦了什么。直播卡=首页/动态里链向直播间的推荐卡。</div>`;
+      <div class="hint">广告由脚本自动识别，偶有误差，可在下方「屏蔽记录」核对实际拦截的内容。直播卡指首页与动态中指向直播间的推荐卡。</div>`;
     G.base.appendChild(ct);
     bindControl(ct, "bfb-ad", CONFIG, "hideAd", { after: rescanAfterRuleChange });
     bindControl(ct, "bfb-live", CONFIG, "hideLiveCard", { after: rescanAfterRuleChange });
@@ -2821,10 +2824,10 @@
     const num = document.createElement("div");
     num.className = "sec";
     num.innerHTML = `<label>播放量 / 时长</label>
-      <div class="switch" style="margin-top:4px;font-weight:400">播放量低于 <input type="number" id="bfb-minviews" min="0" step="0.1" style="width:64px"> 万则屏蔽（0=不启用）</div>
+      <div class="switch" style="margin-top:4px;font-weight:400">播放量低于 <input type="number" id="bfb-minviews" min="0" step="0.1" style="width:64px"> 万则屏蔽（0 为不启用）</div>
       <div class="switch" style="margin-top:8px;font-weight:400">时长　最短 <input type="number" id="bfb-dmin" min="0" style="width:64px"> 秒　最长 <input type="number" id="bfb-dmax" min="0" style="width:64px"> 秒</div>
-      <div class="switch" style="margin-top:8px;font-weight:400">营销号：点赞率低于 <input type="number" id="bfb-spamratio" min="0" max="100" step="0.1" style="width:56px"> % 且播放≥ <input type="number" id="bfb-spamviews" min="0" step="1" style="width:56px"> 万 则屏蔽</div>
-      <div class="hint">填 0 表示该项不启用。营销号/搬运号常"高播放、极低赞"。⚠ 点赞率<b>仅在接口返回点赞数时生效（主要是首页推荐流）</b>；拿不到点赞数的卡片（部分 SSR / 动态）会跳过此项，不影响其它规则。</div>`;
+      <div class="switch" style="margin-top:8px;font-weight:400">营销号：点赞率低于 <input type="number" id="bfb-spamratio" min="0" max="100" step="0.1" style="width:56px"> % 且播放量≥ <input type="number" id="bfb-spamviews" min="0" step="1" style="width:56px"> 万则屏蔽</div>
+      <div class="hint">填 0 表示该项不启用。营销号、搬运号常表现为「高播放、极低赞」。⚠ 点赞率<b>仅在接口返回点赞数时生效（主要为首页推荐流）</b>；无法获取点赞数的卡片（部分 SSR / 动态）会跳过此项，不影响其它规则。</div>`;
     G.api.appendChild(num);
     bindControl(num, "bfb-minviews", CONFIG.block, "minViews", { number: true, after: rescanAfterRuleChange });
     bindControl(num, "bfb-dmin", CONFIG.block, "minDuration", { number: true, int: true, after: rescanAfterRuleChange });
@@ -2835,7 +2838,7 @@
     feed.className = "sec";
     feed.innerHTML = `<label>信息流加载</label>
       <div class="switch"><input type="checkbox" id="bfb-boost"> 增大首页推荐每批加载数量</div>
-      <div class="hint">拦截层会删掉命中项，开启后让每批多取一些视频，删后信息流更饱满。下次加载 / 刷新生效；个别情况下可能影响载入，异常就关掉。</div>`;
+      <div class="hint">拦截层会删除命中项，开启后每批多取一些视频，删除后信息流更饱满。下次加载或刷新生效；个别情况下可能影响载入，如有异常请关闭。</div>`;
     G.api.appendChild(feed);
     bindControl(feed, "bfb-boost", CONFIG, "boostFeedLoad");
     const api = document.createElement("div");
@@ -2867,10 +2870,10 @@
     cmt.innerHTML = `
       <label>💬 评论区过滤</label>
       <div class="switch"><input type="checkbox" id="bfb-cmt"> <b>启用评论区过滤</b></div>
-      <div class="hint">读取评论数据后隐藏命中的评论，仅在有评论的页面（播放页 / 动态 / 空间等）生效。下面规则与视频黑名单互相独立。</div>
+      <div class="hint">读取评论数据后隐藏命中的评论，仅在含评论的页面（播放页、动态、空间等）生效。以下规则与视频黑名单相互独立。</div>
       <div id="bfb-cmt-body" style="margin-top:6px">
         <div class="switch" style="font-weight:400">评论者等级低于 <input type="number" id="bfb-cmt-level" min="0" max="6" style="width:56px"> 级则隐藏（0=不启用）</div>
-        <div class="switch"><input type="checkbox" id="bfb-cmt-noface"> 隐藏 默认头像且非会员（疑似小号/水军）</div>
+        <div class="switch"><input type="checkbox" id="bfb-cmt-noface"> 隐藏 默认头像且非会员（疑似小号、水军）</div>
         <div class="switch"><input type="checkbox" id="bfb-cmt-bot"> 隐藏 AI 机器人发布的评论</div>
         <div class="switch"><input type="checkbox" id="bfb-cmt-callbot"> 隐藏 召唤 AI 的评论</div>
         <div class="switch"><input type="checkbox" id="bfb-cmt-ad"> 隐藏 带货 / 导流广告评论</div>
@@ -2908,8 +2911,8 @@
     syncCmtBody();
     renderListField(G.comment, {
       label: "🚫 评论关键词",
-      placeholder: "如：引战词 或 /.../　",
-      hint: "评论正文命中即隐藏。普通词=包含；/.../ =正则。与视频关键词相互独立。",
+      placeholder: "如：引战词 或 /.../",
+      hint: "评论正文命中即隐藏。普通词为包含匹配，/.../ 为正则。与视频关键词相互独立。",
       model: chipModel(CONFIG.comment.keywords)
     });
     renderListField(G.comment, {
@@ -2921,13 +2924,13 @@
     renderListField(G.comment, {
       label: "🚫 用户名关键词",
       placeholder: "如：营销 或 /.../",
-      hint: "按评论者昵称关键词隐藏。普通词=包含；/.../ =正则。",
+      hint: "按评论者昵称关键词隐藏。普通词为包含匹配，/.../ 为正则。",
       model: chipModel(CONFIG.comment.userNameKeywords)
     });
     renderFields(G.allow, ALLOW_FIELDS);
     const preset = document.createElement("div");
     preset.className = "sec";
-    preset.innerHTML = '<label>预置规则库（点一下加入对应黑名单，可叠加）</label><div class="hint">这只是「一键灌词」入口，本身不是规则；点完后真正生效的规则在「黑名单」页可增删。需要持续更新的大名单请用「规则订阅」。</div><div id="bfb-presets"></div>';
+    preset.innerHTML = '<label>预置规则库（点击加入对应黑名单，可叠加）</label><div class="hint">这是「一键批量添加」入口，本身不是规则；添加后真正生效的规则可在「黑名单」页增删。需要持续更新的大名单请使用「规则订阅」。</div><div id="bfb-presets"></div>';
     G.tools.appendChild(preset);
     const presetBox = preset.querySelector("#bfb-presets");
     const applyPreset = (p2) => {
@@ -2949,7 +2952,7 @@
         p.classList.add("open");
       };
       if (needsApi && !CONFIG.apiFilters) {
-        confirmModal(`「${p2.name}」含需联网读取（标签 / 简介）的规则，必须开启「精确过滤」才会生效。是否现在开启？`, {
+        confirmModal(`「${p2.name}」含需联网读取（标签、简介）的规则，需开启「精确过滤」才会生效。是否现在开启？`, {
           title: "开启精确过滤",
           okText: "开启"
         }).then((ok) => {
@@ -2968,7 +2971,7 @@
     PRESET_LIBRARY.forEach((pp) => (byCat[pp.cat] = byCat[pp.cat] || []).push(pp));
     Object.keys(byCat).forEach((cat) => {
       const cl = document.createElement("div");
-      cl.style.cssText = "font-size:12px;color:#888;margin:8px 0 4px";
+      cl.style.cssText = "font-size:12px;color:#6e6e6e;margin:8px 0 4px";
       cl.textContent = cat;
       presetBox.appendChild(cl);
       const bar = document.createElement("div");
@@ -2987,7 +2990,7 @@
     retest.className = "sec";
     retest.innerHTML = `<label>🧪 正则测试器（仅调试用，不影响规则）</label>
       <div class="addrow"><input type="text" id="bfb-re-pat" placeholder="正则或普通词，如 /一口气.*看完/i"></div>
-      <div class="addrow" style="margin-top:6px"><input type="text" id="bfb-re-txt" placeholder="样例文本（粘个标题来试）"></div>
+      <div class="addrow" style="margin-top:6px"><input type="text" id="bfb-re-txt" placeholder="样例文本（粘贴一个标题试试）"></div>
       <div class="hint" id="bfb-re-out" style="margin-top:6px">输入正则与样例文本，实时显示是否命中。/.../ 按正则，否则按普通词（包含即命中）。</div>`;
     G.tools.appendChild(retest);
     const rePat = retest.querySelector("#bfb-re-pat");
@@ -3017,15 +3020,15 @@
       }
       const hit = re.test(txt);
       reOut.textContent = hit ? "✅ 命中" : "✗ 未命中";
-      reOut.style.color = hit ? "#1b7a3d" : "#999";
+      reOut.style.color = hit ? "#1b7a3d" : "#6e6e6e";
     };
     rePat.oninput = runReTest;
     reTxt.oninput = runReTest;
     const io = document.createElement("div");
     io.className = "sec";
-    io.innerHTML = `<label>规则配置 导入 / 导出（备份 / 分享给其他人）</label>
+    io.innerHTML = `<label>规则配置导入 / 导出（备份、分享给他人）</label>
       <div class="toolbar"><button class="act" id="bfb-export">⬇ 导出为文件</button><button class="act ghost" id="bfb-import">⬆ 从文件导入</button></div>
-      <div class="hint">导出你的全部过滤规则与开关（不含统计/缓存/个人偏好）。导入时：规则列表取<b>并集</b>（不会丢现有规则），开关以导入值为准。</div>`;
+      <div class="hint">导出你的全部过滤规则与开关（不含统计、缓存、个人偏好）。导入时规则列表取<b>并集</b>（不会丢失现有规则），开关以导入值为准。</div>`;
     G.tools.appendChild(io);
     io.querySelector("#bfb-export").onclick = () => {
       const blob = new Blob([exportConfig()], { type: "application/json" });
@@ -3073,7 +3076,7 @@
     subSec.innerHTML = `<label>规则订阅（从 URL 自动拉取并合并黑名单）</label>
       <div class="addrow"><input type="text" id="bfb-sub-url" placeholder="订阅 URL（JSON 或文本，如 GitHub raw）"></div>
       <div class="addrow" style="margin-top:6px"><input type="text" id="bfb-sub-name" placeholder="备注名（可选）"><button id="bfb-sub-add">添加</button></div>
-      <div class="hint">订阅只并入<b>黑名单</b>（UID/UP名/关键词/分区/标签/简介/BV），不影响你的白名单与开关；启用后按列表声明的周期自动刷新。</div>
+      <div class="hint">订阅只并入<b>黑名单</b>（UID、UP 主名、关键词、分区、标签、简介、BV 号），不影响你的白名单与开关；启用后按列表声明的周期自动刷新。</div>
       <div class="toolbar" style="margin-top:8px"><button class="act ghost" id="bfb-sub-refresh">🔄 全部刷新</button></div>
       <div id="bfb-sub-list" style="margin-top:8px"></div>`;
     G.tools.appendChild(subSec);
@@ -3097,8 +3100,8 @@
         row.className = "bfb-sub-row";
         row.innerHTML = `
           <label class="switch" style="margin:0"><input type="checkbox" class="sub-en" ${sub.enabled ? "checked" : ""}> <b>${escapeHtml(sub.name || metaGet(e.meta, "title") || "订阅")}</b></label>
-          <div style="font-size:11px;color:#aaa;word-break:break-all;margin-top:4px">${escapeHtml(sub.url)}</div>
-          <div style="font-size:11px;color:#888;margin-top:4px">${escapeHtml(status)}</div>
+          <div class="bfb-sub-url">${escapeHtml(sub.url)}</div>
+          <div class="bfb-sub-status">${escapeHtml(status)}</div>
           <div class="chip-bar"><button class="chip-act sub-refresh">刷新</button><button class="chip-act sub-del">删除</button></div>`;
         row.querySelector(".sub-en").onchange = (ev) => {
           sub.enabled = ev.target.checked;
@@ -3160,7 +3163,7 @@
     batch.className = "sec";
     batch.innerHTML = `<label>批量拉黑</label>
       <button class="act" id="bfb-batch-block" style="width:100%">⛔ 拉黑当前页所有已屏蔽的 UP</button>
-      <div class="hint">扫描本页所有被屏蔽的卡片并拉黑其 UP；拿不到 UID 的会用 BV 号联网解析。此操作写入账号黑名单、不可一键撤销，会二次确认。</div>`;
+      <div class="hint">扫描本页所有被屏蔽的卡片并拉黑其 UP；无法获取 UID 的将通过 BV 号联网解析。此操作写入账号黑名单、不可一键撤销，执行前会二次确认。</div>`;
     G.tools.appendChild(batch);
     batch.querySelector("#bfb-batch-block").onclick = () => {
       const blocked = document.querySelectorAll("[" + ATTR_BLOCKED + "]");
@@ -3237,7 +3240,7 @@
     const listSec = document.createElement("div");
     listSec.className = "sec";
     listSec.innerHTML = `<label>名单批量处理（粘贴 / 文件 / URL）</label>
-      <textarea id="bfb-list-input" class="bfb-listta" rows="4" placeholder="粘贴一批 UID 或 UP 名，空格 / 逗号 / 换行 / 分号 分隔均可。&#10;纯数字按 UID；其它按 UP 名；也支持 uid:123 / up:名字 前缀。"></textarea>
+      <textarea id="bfb-list-input" class="bfb-listta" rows="4" placeholder="粘贴一批 UID 或 UP 名，空格、逗号、换行、分号均可分隔。&#10;纯数字识别为 UID，其余识别为 UP 名；也支持 uid:123、up:名字 前缀。"></textarea>
       <div class="toolbar" style="margin-top:6px">
         <button class="act ghost" id="bfb-list-file">📁 从文件载入</button>
         <button class="act ghost" id="bfb-list-url">🔗 从 URL 载入</button>
@@ -3247,7 +3250,7 @@
         <button class="act ghost" id="bfb-list-block" style="color:#e74c3c">⛔ 拉黑（写账号黑名单）</button>
         <button class="act ghost" id="bfb-list-stop" style="display:none;color:#e67e22">⏹ 停止</button>
       </div>
-      <div class="hint">「仅屏蔽」只在本地隐藏、不碰账号；「拉黑」会写入账号黑名单（刷新后不再推荐），限速执行、触发风控自动暂停续传、<b>不可一键撤销</b>、执行前二次确认。只有名称没 UID 的，拉黑时自动降级为仅本地屏蔽。拉黑成功的会进下方「屏蔽记录」。</div>
+      <div class="hint">「仅屏蔽」只在本地隐藏、不涉及账号；「拉黑」会写入账号黑名单（刷新后不再推荐），限速执行、触发风控时自动暂停续传、<b>不可一键撤销</b>、执行前二次确认。仅有名称、无 UID 的条目，拉黑时自动降级为仅本地屏蔽。拉黑成功的条目会记入下方「屏蔽记录」。</div>
       <div id="bfb-list-status" class="stat" style="margin-top:6px;min-height:1.2em"></div>`;
     G.tools.insertBefore(listSec, subSec);
     const listTa = listSec.querySelector("#bfb-list-input");
@@ -3377,7 +3380,7 @@
     };
     const tool = document.createElement("div");
     tool.className = "sec toolbar";
-    tool.innerHTML = `<button class="act ghost" id="bfb-clearcount">清空计数/记录</button><button class="act ghost" id="bfb-reset">恢复默认</button>`;
+    tool.innerHTML = `<button class="act ghost" id="bfb-clearcount">清空计数 / 记录</button><button class="act ghost" id="bfb-reset">恢复默认</button>`;
     G.tools.appendChild(tool);
     tool.querySelector("#bfb-clearcount").onclick = () => {
       CONFIG.blockedCount = 0;
@@ -3401,14 +3404,14 @@
     };
     const logSec = document.createElement("div");
     logSec.className = "sec";
-    logSec.innerHTML = `<label>🔎 屏蔽记录（本次会话共 <span id="bfb-log-count">0</span> 条） <button class="act ghost" id="bfb-log-toggle" style="float:right">展开/收起</button></label><div class="stat" id="bfb-log-tally">分类：暂无</div><div id="bfb-log-list" style="display:none;max-height:240px;overflow:auto;overscroll-behavior:contain;margin-top:6px;font-size:12px"></div>`;
+    logSec.innerHTML = `<label>🔎 屏蔽记录（本次会话共 <span id="bfb-log-count">0</span> 条） <button class="act ghost" id="bfb-log-toggle" style="float:right">展开 / 收起</button></label><div class="stat" id="bfb-log-tally">分类：暂无</div><div id="bfb-log-list" style="display:none;max-height:240px;overflow:auto;overscroll-behavior:contain;margin-top:6px;font-size:12px"></div>`;
     G.tools.appendChild(logSec);
     const logList = logSec.querySelector("#bfb-log-list");
     const logCount = logSec.querySelector("#bfb-log-count");
     const logTally = logSec.querySelector("#bfb-log-tally");
     const foot = document.createElement("div");
     foot.className = "sec";
-    foot.innerHTML = `<a class="manage" href="${BLACKLIST_MANAGE_URL}" target="_blank">→ 打开 B 站官方黑名单管理页（取消拉黑/查看人数）</a>
+    foot.innerHTML = `<a class="manage" href="${BLACKLIST_MANAGE_URL}" target="_blank">→ 打开 B 站官方黑名单管理页（取消拉黑 / 查看人数）</a>
       <div class="stat" style="margin-top:6px">累计拦截 <span id="bfb-foot-total">0</span> 次 · 本次会话 <span id="bfb-foot-session">0</span> 次</div>`;
     G.tools.appendChild(foot);
     const footTotal = foot.querySelector("#bfb-foot-total");

@@ -94,7 +94,7 @@ export function onContextMenu(e) {
   }
   if (info.up) {
     items.push({
-      label: `🚫 屏蔽UP「${info.up}」`,
+      label: `🚫 屏蔽 UP「${info.up}」`,
       act: () => {
         if (info.uid) addToList(CONFIG.block.uids, info.uid);
         else addToList(CONFIG.block.upNames, info.up);
@@ -103,7 +103,7 @@ export function onContextMenu(e) {
       },
     });
     items.push({
-      label: `⛔ 拉黑UP「${info.up}」(同步账号黑名单)`,
+      label: `⛔ 拉黑 UP「${info.up}」（同步账号黑名单）`,
       act: () => {
         confirmBlacklist(info.up).then((ok) => {
           if (ok) blacklistUp(info, refreshPanelIfOpen, card);
@@ -111,7 +111,7 @@ export function onContextMenu(e) {
       },
     });
     items.push({
-      label: `⭐ 加白名单(永不屏蔽此UP)`,
+      label: `⭐ 加入白名单（永不屏蔽此 UP）`,
       act: () => {
         addToList(CONFIG.allow.upNames, info.up);
         toast(`已加入白名单：${info.up}`);
@@ -121,7 +121,7 @@ export function onContextMenu(e) {
   }
   if (info.bvid) {
     items.push({
-      label: `🚫 屏蔽此视频 (${info.bvid})`,
+      label: `🚫 屏蔽此视频（${info.bvid}）`,
       act: () => {
         addToList(CONFIG.block.bvids, info.bvid);
         toast(`已屏蔽视频：${info.bvid}`);
