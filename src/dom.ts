@@ -57,7 +57,7 @@ function markCard(card, reason, info) {
 }
 
 // DOM 兜底层：审查模式标记、否则直接隐藏漏网卡。主路径由网络拦截层在渲染前就删除。
-function blockVideo(card, reason, info) {
+export function blockVideo(card, reason, info) {
   if (CONFIG.reviewMode) {
     markCard(card, reason, info);
   } else {

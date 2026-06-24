@@ -1269,7 +1269,7 @@
     return s.replace(/@[^@\s]+/g, " ").replace(/(\[[^[\]]+\])+/g, " ").trim();
   }
   var EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u200d\u{20E3}]/gu;
-  function readCmt2(host) {
+  function readCmt(host) {
     const d = host && host.__data || {};
     const member = d.member || {};
     const content = d.content || {};
@@ -1344,7 +1344,7 @@
   var processComment = safe("processComment", function(host, isSub) {
     if (host.__bfbCmtV === ruleVersion) return;
     host.__bfbCmtV = ruleVersion;
-    const c = readCmt2(host);
+    const c = readCmt(host);
     if (!c.uname && !c.message) return;
     const reason = matchComment(c, isSub);
     if (reason) {
@@ -1677,7 +1677,7 @@
     }
     card.appendChild(tag);
   }
-  function blockVideo2(card, reason, info) {
+  function blockVideo(card, reason, info) {
     if (CONFIG.reviewMode) {
       markCard(card, reason, info);
     } else {
@@ -1700,7 +1700,7 @@
     const hit = matchRule(info);
     if (!hit) log(`放行✅ | 标题:${info.title || "(无)"} | UP:${info.up || "(无)"} | 标签:${info.partition || "(无)"}`);
     if (hit) {
-      blockVideo2(card, hit, info);
+      blockVideo(card, hit, info);
       return;
     }
     if (info.bvid && apiRulesActive()) evaluateApi(card, info);
@@ -1717,7 +1717,7 @@
       if (pending > 0) return;
       if (!CONFIG.enabled || isWhitelisted(info)) return;
       const hit = matchApi(info, view, tags, cardData);
-      if (hit) blockVideo2(card, hit, info);
+      if (hit) blockVideo(card, hit, info);
       else log(`API放行 | ${info.title || ""}`);
     };
     const afterView = () => {
@@ -2047,6 +2047,203 @@
     });
   }
 
+  // src/ui/menu.ts
+  var ctxMenuEl = null;
+  function closeCtxMenu() {
+    if (ctxMenuEl) {
+      ctxMenuEl.remove();
+      ctxMenuEl = null;
+    }
+  }
+  function onContextMenu(e) {
+    if (!CONFIG.enabled || !CONFIG.rightClickBlock) return;
+    if (CONFIG.comment.enabled) {
+      const cmtHost = findCommentHost(e);
+      if (cmtHost) {
+        const c = readCmt(cmtHost);
+        const citems = [];
+        const csel = window.getSelection && window.getSelection().toString().trim() || "";
+        if (csel && csel.length <= 30) {
+          citems.push({
+            label: `🚫 评论含「${csel}」关键词`,
+            act: () => {
+              addToList(CONFIG.comment.keywords, csel);
+              toast(`已加入评论关键词：${csel}`);
+              refreshPanelIfOpen();
+            }
+          });
+        }
+        if (c.uname) {
+          citems.push({
+            label: `🚫 屏蔽评论用户「${c.uname}」`,
+            act: () => {
+              addToList(CONFIG.comment.userNames, c.uname);
+              toast(`已屏蔽评论用户：${c.uname}`);
+              refreshPanelIfOpen();
+            }
+          });
+        }
+        if (citems.length) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeCtxMenu();
+          renderCtxMenu(e, citems);
+          return;
+        }
+      }
+    }
+    const card = e.target.closest(VIDEO_CARD_SELECTOR);
+    if (!card) return;
+    const info = extractCardInfo(card, true);
+    if (!info.up && !info.bvid) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeCtxMenu();
+    const items = [];
+    const sel = window.getSelection && window.getSelection().toString().trim() || "";
+    if (sel && sel.length <= 30) {
+      items.push({
+        label: `🚫 屏蔽含「${sel}」关键词`,
+        act: () => {
+          addToList(CONFIG.block.keywords, sel);
+          toast(`已加入关键词：${sel}`);
+          refreshPanelIfOpen();
+        }
+      });
+    }
+    if (info.up) {
+      items.push({
+        label: `🚫 屏蔽UP「${info.up}」`,
+        act: () => {
+          if (info.uid) addToList(CONFIG.block.uids, info.uid);
+          else addToList(CONFIG.block.upNames, info.up);
+          toast(`已屏蔽 UP：${info.up}`);
+          refreshPanelIfOpen();
+        }
+      });
+      items.push({
+        label: `⛔ 拉黑UP「${info.up}」(同步账号黑名单)`,
+        act: () => blacklistUp(info, refreshPanelIfOpen, card)
+      });
+      items.push({
+        label: `⭐ 加白名单(永不屏蔽此UP)`,
+        act: () => {
+          addToList(CONFIG.allow.upNames, info.up);
+          toast(`已加入白名单：${info.up}`);
+          refreshPanelIfOpen();
+        }
+      });
+    }
+    if (info.bvid) {
+      items.push({
+        label: `🚫 屏蔽此视频 (${info.bvid})`,
+        act: () => {
+          addToList(CONFIG.block.bvids, info.bvid);
+          toast(`已屏蔽视频：${info.bvid}`);
+          refreshPanelIfOpen();
+        }
+      });
+    }
+    items.push({
+      label: "🙈 隐藏这一张",
+      act: () => {
+        card.setAttribute(PROCESSED, "1");
+        blockVideo(card, "手动", info);
+      }
+    });
+    items.push({ label: "⚙️ 打开设置面板", act: openPanel });
+    renderCtxMenu(e, items);
+  }
+  function renderCtxMenu(e, items) {
+    const menu = document.createElement("div");
+    menu.id = "bfb-ctxmenu";
+    items.forEach((it) => {
+      const row = document.createElement("div");
+      row.className = "bfb-ctx-item";
+      row.textContent = it.label;
+      row.onclick = () => {
+        closeCtxMenu();
+        it.act();
+      };
+      menu.appendChild(row);
+    });
+    document.body.appendChild(menu);
+    menu.style.left = Math.min(e.clientX, window.innerWidth - 270) + "px";
+    menu.style.top = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10) + "px";
+    ctxMenuEl = menu;
+  }
+  function findCommentHost(e) {
+    const path = e.composedPath && e.composedPath() || [];
+    for (const el of path) {
+      if (el && el.tagName && CMT_TAGS[el.tagName] !== void 0) return el;
+    }
+    return null;
+  }
+  document.addEventListener("click", closeCtxMenu, true);
+  document.addEventListener("scroll", closeCtxMenu, true);
+  var overlayHost = null;
+  var overlayRoot = null;
+  function getOverlayRoot() {
+    if (overlayRoot) return overlayRoot;
+    overlayHost = document.createElement("div");
+    overlayHost.id = "bfb-overlay-host";
+    overlayHost.style.cssText = "position:fixed;inset:0;z-index:100002;pointer-events:none;contain:layout style";
+    overlayRoot = overlayHost.attachShadow({ mode: "open" });
+    const st = document.createElement("style");
+    st.textContent = ".blk{position:fixed;pointer-events:auto;background:rgba(251,114,153,.95);color:#fff;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.28);font-family:system-ui,Arial;user-select:none;display:none}.blk:hover{background:#fb7299}";
+    overlayRoot.appendChild(st);
+    (document.documentElement || document.body).appendChild(overlayHost);
+    return overlayRoot;
+  }
+  var hoverBtn = null;
+  var hoverCard = null;
+  function ensureHoverBtn() {
+    if (hoverBtn) return hoverBtn;
+    const root = getOverlayRoot();
+    hoverBtn = document.createElement("div");
+    hoverBtn.className = "blk";
+    hoverBtn.textContent = "⛔ 拉黑";
+    hoverBtn.title = "拉黑该 UP（同步账号黑名单）";
+    hoverBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!hoverCard) return;
+      const info = hoverCard._bfbInfo || extractCardInfo(hoverCard);
+      if (!info.up && !info.bvid) {
+        toast("该卡片信息不足，无法拉黑");
+        return;
+      }
+      blacklistUp(info, refreshPanelIfOpen, hoverCard);
+      hideHoverBtn();
+    };
+    root.appendChild(hoverBtn);
+    return hoverBtn;
+  }
+  function hideHoverBtn() {
+    if (hoverBtn) hoverBtn.style.display = "none";
+    hoverCard = null;
+  }
+  function positionHoverBtn(card) {
+    const r = card.getBoundingClientRect();
+    if (r.width < 80 || r.height < 60) return hideHoverBtn();
+    const b = ensureHoverBtn();
+    b.style.left = Math.max(8, r.left + 8) + "px";
+    b.style.top = Math.max(8, r.top + 8) + "px";
+    b.style.display = "block";
+    hoverCard = card;
+  }
+  function onCardHover(e) {
+    if (!CONFIG.enabled || !CONFIG.cardHoverBtn) return;
+    const t = e.target;
+    if (t === overlayHost) return;
+    const card = t.closest && t.closest(VIDEO_CARD_SELECTOR);
+    if (card) {
+      if (card !== hoverCard) positionHoverBtn(card);
+    } else {
+      hideHoverBtn();
+    }
+  }
+
   // src/main.ts
   (function() {
     "use strict";
@@ -2080,201 +2277,6 @@
       }
     }
     let panelStatsRefresh = null;
-    let ctxMenuEl = null;
-    function closeCtxMenu() {
-      if (ctxMenuEl) {
-        ctxMenuEl.remove();
-        ctxMenuEl = null;
-      }
-    }
-    function onContextMenu(e) {
-      if (!CONFIG.enabled || !CONFIG.rightClickBlock) return;
-      if (CONFIG.comment.enabled) {
-        const cmtHost = findCommentHost(e);
-        if (cmtHost) {
-          const c = readCmt(cmtHost);
-          const citems = [];
-          const csel = window.getSelection && window.getSelection().toString().trim() || "";
-          if (csel && csel.length <= 30) {
-            citems.push({
-              label: `🚫 评论含「${csel}」关键词`,
-              act: () => {
-                addToList(CONFIG.comment.keywords, csel);
-                toast(`已加入评论关键词：${csel}`);
-                refreshPanelIfOpen2();
-              }
-            });
-          }
-          if (c.uname) {
-            citems.push({
-              label: `🚫 屏蔽评论用户「${c.uname}」`,
-              act: () => {
-                addToList(CONFIG.comment.userNames, c.uname);
-                toast(`已屏蔽评论用户：${c.uname}`);
-                refreshPanelIfOpen2();
-              }
-            });
-          }
-          if (citems.length) {
-            e.preventDefault();
-            e.stopPropagation();
-            closeCtxMenu();
-            renderCtxMenu(e, citems);
-            return;
-          }
-        }
-      }
-      const card = e.target.closest(VIDEO_CARD_SELECTOR);
-      if (!card) return;
-      const info = extractCardInfo(card, true);
-      if (!info.up && !info.bvid) return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeCtxMenu();
-      const items = [];
-      const sel = window.getSelection && window.getSelection().toString().trim() || "";
-      if (sel && sel.length <= 30) {
-        items.push({
-          label: `🚫 屏蔽含「${sel}」关键词`,
-          act: () => {
-            addToList(CONFIG.block.keywords, sel);
-            toast(`已加入关键词：${sel}`);
-            refreshPanelIfOpen2();
-          }
-        });
-      }
-      if (info.up) {
-        items.push({
-          label: `🚫 屏蔽UP「${info.up}」`,
-          act: () => {
-            if (info.uid) addToList(CONFIG.block.uids, info.uid);
-            else addToList(CONFIG.block.upNames, info.up);
-            toast(`已屏蔽 UP：${info.up}`);
-            refreshPanelIfOpen2();
-          }
-        });
-        items.push({
-          label: `⛔ 拉黑UP「${info.up}」(同步账号黑名单)`,
-          act: () => blacklistUp(info, refreshPanelIfOpen2, card)
-        });
-        items.push({
-          label: `⭐ 加白名单(永不屏蔽此UP)`,
-          act: () => {
-            addToList(CONFIG.allow.upNames, info.up);
-            toast(`已加入白名单：${info.up}`);
-            refreshPanelIfOpen2();
-          }
-        });
-      }
-      if (info.bvid) {
-        items.push({
-          label: `🚫 屏蔽此视频 (${info.bvid})`,
-          act: () => {
-            addToList(CONFIG.block.bvids, info.bvid);
-            toast(`已屏蔽视频：${info.bvid}`);
-            refreshPanelIfOpen2();
-          }
-        });
-      }
-      items.push({
-        label: "🙈 隐藏这一张",
-        act: () => {
-          card.setAttribute(PROCESSED, "1");
-          blockVideo(card, "手动", info);
-        }
-      });
-      items.push({ label: "⚙️ 打开设置面板", act: openPanel2 });
-      renderCtxMenu(e, items);
-    }
-    function renderCtxMenu(e, items) {
-      const menu = document.createElement("div");
-      menu.id = "bfb-ctxmenu";
-      items.forEach((it) => {
-        const row = document.createElement("div");
-        row.className = "bfb-ctx-item";
-        row.textContent = it.label;
-        row.onclick = () => {
-          closeCtxMenu();
-          it.act();
-        };
-        menu.appendChild(row);
-      });
-      document.body.appendChild(menu);
-      menu.style.left = Math.min(e.clientX, window.innerWidth - 270) + "px";
-      menu.style.top = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10) + "px";
-      ctxMenuEl = menu;
-    }
-    function findCommentHost(e) {
-      const path = e.composedPath && e.composedPath() || [];
-      for (const el of path) {
-        if (el && el.tagName && CMT_TAGS[el.tagName] !== void 0) return el;
-      }
-      return null;
-    }
-    document.addEventListener("click", closeCtxMenu, true);
-    document.addEventListener("scroll", closeCtxMenu, true);
-    let overlayHost = null;
-    let overlayRoot = null;
-    function getOverlayRoot() {
-      if (overlayRoot) return overlayRoot;
-      overlayHost = document.createElement("div");
-      overlayHost.id = "bfb-overlay-host";
-      overlayHost.style.cssText = "position:fixed;inset:0;z-index:100002;pointer-events:none;contain:layout style";
-      overlayRoot = overlayHost.attachShadow({ mode: "open" });
-      const st = document.createElement("style");
-      st.textContent = ".blk{position:fixed;pointer-events:auto;background:rgba(251,114,153,.95);color:#fff;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.28);font-family:system-ui,Arial;user-select:none;display:none}.blk:hover{background:#fb7299}";
-      overlayRoot.appendChild(st);
-      (document.documentElement || document.body).appendChild(overlayHost);
-      return overlayRoot;
-    }
-    let hoverBtn = null;
-    let hoverCard = null;
-    function ensureHoverBtn() {
-      if (hoverBtn) return hoverBtn;
-      const root = getOverlayRoot();
-      hoverBtn = document.createElement("div");
-      hoverBtn.className = "blk";
-      hoverBtn.textContent = "⛔ 拉黑";
-      hoverBtn.title = "拉黑该 UP（同步账号黑名单）";
-      hoverBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!hoverCard) return;
-        const info = hoverCard._bfbInfo || extractCardInfo(hoverCard);
-        if (!info.up && !info.bvid) {
-          toast("该卡片信息不足，无法拉黑");
-          return;
-        }
-        blacklistUp(info, refreshPanelIfOpen2, hoverCard);
-        hideHoverBtn();
-      };
-      root.appendChild(hoverBtn);
-      return hoverBtn;
-    }
-    function hideHoverBtn() {
-      if (hoverBtn) hoverBtn.style.display = "none";
-      hoverCard = null;
-    }
-    function positionHoverBtn(card) {
-      const r = card.getBoundingClientRect();
-      if (r.width < 80 || r.height < 60) return hideHoverBtn();
-      const b = ensureHoverBtn();
-      b.style.left = Math.max(8, r.left + 8) + "px";
-      b.style.top = Math.max(8, r.top + 8) + "px";
-      b.style.display = "block";
-      hoverCard = card;
-    }
-    function onCardHover(e) {
-      if (!CONFIG.enabled || !CONFIG.cardHoverBtn) return;
-      const t = e.target;
-      if (t === overlayHost) return;
-      const card = t.closest && t.closest(VIDEO_CARD_SELECTOR);
-      if (card) {
-        if (card !== hoverCard) positionHoverBtn(card);
-      } else {
-        hideHoverBtn();
-      }
-    }
     GM_addStyle(`
     .bfb-review{outline:2px solid #fb7299 !important;outline-offset:-2px;border-radius:8px;position:relative !important}
     .bfb-tag{position:absolute;top:6px;left:6px;z-index:9;display:flex;align-items:center;gap:6px;background:rgba(251,114,153,.95);color:#fff;border-radius:8px;padding:3px 6px;font-size:11px;font-family:system-ui,Arial;box-shadow:0 2px 6px rgba(0,0,0,.25)}

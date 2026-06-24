@@ -22,7 +22,7 @@ function cmtCleanMsg(msg, isSub) {
 // 去表情后是否为空（纯表情/纯 @）
 const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u200d\u{20E3}]/gu;
 
-function readCmt(host) {
+export function readCmt(host) {
   const d = (host && host.__data) || {};
   const member = d.member || {};
   const content = d.content || {};
