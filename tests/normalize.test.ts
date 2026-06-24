@@ -70,6 +70,12 @@ describe('compileLines + textHit', () => {
     expect(compileLines([]).empty).toBe(true);
     expect(compileLines(null).empty).toBe(true);
   });
+  it('超长 /正则/ 被忽略（ReDoS 防护）', () => {
+    const huge = '/' + 'a'.repeat(2000) + '/';
+    expect(compileLines([huge]).empty).toBe(true);
+    // 正常长度正则仍生效
+    expect(compileLines(['/abc/']).empty).toBe(false);
+  });
   it('fuzzy 开：普通词与文本两侧一致，绕过分隔符仍命中', () => {
     configureFuzzy(() => true);
     const m = compileLines(['原神']);

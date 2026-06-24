@@ -163,7 +163,9 @@ export function scheduleSave(): void {
 }
 
 // 导出：仅含可分享的规则与过滤开关，剔除统计/缓存/个人会话偏好。
-const NON_PORTABLE = ['blockedCount', 'uidNames', 'enabled', 'debug', 'reviewMode', 'subscriptions'];
+// 不可移植键：导出时剔除、导入时同样剔除（对称）。尤其 subscriptions——否则别人分享的「规则文件」
+// 可借导入悄悄塞进会自动联网拉取的订阅 URL（安全风险）。
+export const NON_PORTABLE = ['blockedCount', 'uidNames', 'enabled', 'debug', 'reviewMode', 'subscriptions'];
 export function exportConfig(): string {
   const c: Record<string, any> = structuredClone(CONFIG);
   NON_PORTABLE.forEach((k) => delete c[k]);

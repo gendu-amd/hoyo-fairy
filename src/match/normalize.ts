@@ -41,6 +41,9 @@ export interface Matcher {
   empty: boolean;
 }
 
+// 单条 /正则/ 模式体的长度上限（ReDoS 防护，主要针对订阅/导入的不可信正则）。正常规则远不及此。
+export const MAX_REGEX_LEN = 1000;
+
 // 把一组规则行编译成匹配器：普通词 → 归一/转义后合并成单条正则（性能更好）；
 // /.../ 行 → 各自独立编译（保留其原有 flags，如 m/s/g 语义不被合并破坏）。
 export function compileLines(lines: readonly string[] | null | undefined): Matcher {
@@ -51,6 +54,8 @@ export function compileLines(lines: readonly string[] | null | undefined): Match
     if (!line) continue;
     const m = line.match(/^\/(.*)\/([a-z]*)$/);
     if (m) {
+      // ReDoS 防护：过长的 /正则/（多来自订阅/导入的不可信来源）直接忽略，避免灾难性回溯卡死页面。
+      if (m[1].length > MAX_REGEX_LEN) continue;
       try {
         const flags = m[2] || 'i';
         regexes.push(new RegExp(m[1], flags.includes('i') ? flags : flags + 'i'));

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         biliHoyoFairy · 抗击黑潮
 // @namespace    https://github.com/gendu-amd/biliHoyoFairy
-// @version      0.0.5
+// @version      0.0.6
 // @description  B站(bilibili)推荐流净化：屏蔽黑流量、引战视频、商业广告与不想看的 UP 主。支持按 标签/UP主/UID/关键词(可正则)/分区/时长/播放量/BV 精准过滤；覆盖首页/热门/排行榜/搜索/播放页/动态/评论区；白名单优先防误伤；右键一键屏蔽/拉黑(同步账号黑名单)；内置预置关键词库。
 // @author       gendu-amd
 // @match        https://www.bilibili.com/*
@@ -13,7 +13,6 @@
 // @connect      raw.githubusercontent.com
 // @connect      cdn.jsdelivr.net
 // @connect      gitee.com
-// @connect      *
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addStyle
@@ -415,6 +414,7 @@
     if (getFuzzy()) t = t.replace(SEP_RE, "");
     return t;
   }
+  var MAX_REGEX_LEN = 1e3;
   function compileLines(lines) {
     const plainParts = [];
     const regexes = [];
@@ -423,6 +423,7 @@
       if (!line) continue;
       const m = line.match(/^\/(.*)\/([a-z]*)$/);
       if (m) {
+        if (m[1].length > MAX_REGEX_LEN) continue;
         try {
           const flags = m[2] || "i";
           regexes.push(new RegExp(m[1], flags.includes("i") ? flags : flags + "i"));
@@ -2703,6 +2704,7 @@
             const parsed = JSON.parse(r.result);
             const incoming = parsed && parsed.config ? parsed.config : parsed;
             if (!incoming || typeof incoming !== "object") throw new Error("bad");
+            NON_PORTABLE.forEach((k) => delete incoming[k]);
             const draft = structuredClone(CONFIG);
             mergeImport(draft, incoming);
             const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
