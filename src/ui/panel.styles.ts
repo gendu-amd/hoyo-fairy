@@ -112,4 +112,35 @@
     #bfb-panel .bfb-group.active{display:block;animation:bfb-fade .18s ease}
     @keyframes bfb-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
     #bfb-panel .grp-tip{padding:8px 16px;font-size:11px;color:#aaa;background:#fafafa;border-bottom:1px solid #f0f0f0}
+    /* —— 暗色模式（跟随系统 prefers-color-scheme）：仅覆盖自有 UI 表面，品牌粉与语义色保留 —— */
+    @media (prefers-color-scheme: dark){
+      #bfb-panel,.bfb-toast,.bfb-modal,#bfb-ctxmenu{background:#1c1c20;color:#e6e6e9}
+      #bfb-panel .sec{border-bottom-color:#2c2c32}
+      #bfb-panel .sec.allow{background:rgba(39,174,96,.08)}
+      #bfb-panel .sec.api{background:rgba(124,92,255,.1)}
+      #bfb-panel label{color:#cfcfd6}
+      #bfb-panel .switch,#bfb-panel button.ghost{color:#d0d0d6}
+      #bfb-panel .hint,#bfb-panel .stat,#bfb-panel .grp-tip{color:#8a8a92}
+      #bfb-panel .empty{color:#6a6a72}
+      #bfb-panel .addrow input,#bfb-panel input[type=number]{background:#26262b;border-color:#44444c;color:#e6e6e9}
+      #bfb-panel button.ghost{background:#2e2e34}
+      #bfb-panel .switch input[type=checkbox]{background:#45454d}
+      #bfb-panel .chip{background:rgba(251,114,153,.16);color:#ff9ebc;border-color:rgba(251,114,153,.35)}
+      #bfb-panel .sec.allow .chip{background:rgba(39,174,96,.16);color:#6ee7a0;border-color:rgba(39,174,96,.35)}
+      #bfb-panel .chip.group{background:rgba(124,92,255,.18);color:#c4b5fd;border-color:rgba(124,92,255,.4)}
+      #bfb-panel .chip.sel{background:rgba(251,114,153,.3)}
+      #bfb-panel .sec.allow .chip.sel{background:rgba(39,174,96,.3)}
+      #bfb-panel .field .chips{background:#232328;border-color:#34343a}
+      #bfb-panel .chip-act,#bfb-panel .log-blk,#bfb-panel .log-pass,#bfb-panel .log-undo{background:#1c1c20}
+      #bfb-panel .field-head:hover,#bfb-panel .chip-act:hover{background:rgba(251,114,153,.14)}
+      #bfb-panel .tabs{background:#1c1c20;border-bottom-color:#2c2c32}
+      #bfb-panel .tab{background:#2e2e34;color:#a8a8b0}
+      #bfb-panel .tab:hover{background:rgba(251,114,153,.18)}
+      #bfb-panel::-webkit-scrollbar-thumb{border-color:#1c1c20}
+      .bfb-toast{border-color:#38383f}
+      .bfb-modal-msg{color:#d8d8de}
+      .bfb-modal-btn.ghost{background:#2e2e34;color:#d0d0d6}
+      .bfb-ctx-item{color:#d8d8de}
+      .bfb-ctx-item:hover{background:rgba(251,114,153,.16)}
+    }
   `);
