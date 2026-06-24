@@ -36,7 +36,8 @@ src/
 ├─ match/normalize.ts   文本归一 + 规则行编译 + 作用域关键词 + splitRuleInput（fuzzy 注入）
 ├─ subscriptions/parse.ts  订阅文本解析（JSON / uBlock 文本双格式）
 ├─ ui/hooks.ts          UI 回调注入桥（低层模块经它回调面板，避免 import 面板成环）
-├─ ui/panel.styles.ts   面板 CSS（import 副作用注入）
+├─ ui/panel.styles.ts   面板 CSS（import 副作用注入，含暗色 @media）
+├─ ui/confirm.ts        样式化确认/输入弹窗 confirmModal/promptModal（替代原生 confirm/prompt；零内部依赖）
 │
 │  ── L1~L3 状态 / 数据 / 副作用 ──
 ├─ config.ts            AppConfig 类型 + CONFIG 单例 + 存取/合并/导入导出（deepMerge 原型链防护）
@@ -48,7 +49,6 @@ src/
 ├─ api.ts              接口层：风控熔断 riskGuard + 限速并发队列 + fetchView/Tags/Card
 ├─ match/engine.ts     ★匹配引擎：M/ruleVersion + 维度注册表 SYNC_DIMS/API_DIMS + matchRule/matchApi
 ├─ net.ts             ★拦截层：FEED_HOOKS + NET 管线 + filterFeedJson + fetch/XHR 钩子
-├─ stats / rules / events …
 │
 │  ── L4~L5 领域 / DOM ──
 ├─ rules.ts             规则增删统一入口 addToList/removeFromList/pushUnique（改完发 events）
@@ -64,7 +64,7 @@ src/
 └─ ui/panel.ts          设置面板（最大模块）：构建/渲染、各分组、预置、订阅、批量、正则测试、屏蔽记录
 ```
 
-★ = 三处「крест」设计，改动前务必理解（见 §5 扩展点）。
+★ = 两处关键设计（匹配引擎、拦截层），改动前务必理解（见 §5 扩展点）。
 
 ---
 
@@ -74,7 +74,7 @@ src/
 
 ```
 L0 叶子   constants · util · page · events · presets · shadow · batch
-          match/normalize · subscriptions/parse · ui/hooks · ui/panel.styles
+          match/normalize · subscriptions/parse · ui/hooks · ui/panel.styles · ui/confirm
 L1        config
 L2        logging · cardinfo · hotsearch
 L3        stats · subscriptions/store
@@ -148,7 +148,7 @@ L9        main（bootstrap，装配一切）
 
 ## 7. 类型现状
 
-- **强类型（无 `@ts-nocheck`）**：核心/纯逻辑层全部——`constants/util/page/events/presets/batch/shadow/config/logging/cardinfo/hotsearch/stats/api/rules/match·{normalize,engine}/subscriptions·{parse,store,refresh}/ui·{hooks,toast,field?}` 等。改这些会受完整类型检查。
+- **强类型（无 `@ts-nocheck`）**：核心/纯逻辑层全部——`constants/util/page/events/presets/batch/shadow/config/logging/cardinfo/hotsearch/stats/api/rules/match·{normalize,engine}/subscriptions·{parse,store,refresh}/ui·{hooks,toast,confirm,panel.styles}` 等。改这些会受完整类型检查。
 - **`@ts-nocheck`（渐进类型化）**：仅限 DOM/effect/UI 密集层——`net`(fetch/XHR 猴补丁)、`dom`、`comments`(.__data)、`blacklist`(GM POST)、`ui/{panel,menu,field}`、`main`。这些仍受 `eslint no-undef` 兜底（漏 import = 报错）。
 
 ---
