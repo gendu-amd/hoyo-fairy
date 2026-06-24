@@ -101,6 +101,9 @@ export function doBlacklistMany(targets, cb, onProgress) {
   let done = 0;
   let i = 0;
   const failed = []; // { uid, code }：真正没拉成的
+  let cancelled = false; // 用户点「停止」
+  let finished = false; // 防止「取消」与在途回调重复收尾
+  let timer = null; // 当前等待中的定时器（限速/退避），取消时清掉
   const snapshot = (paused) => ({
     done,
     added,
@@ -110,9 +113,16 @@ export function doBlacklistMany(targets, cb, onProgress) {
     total: list.length,
     paused: !!paused,
     wait: paused ? Math.ceil(riskGuard.remaining() / 1000) : 0,
+    cancelled,
   });
   const report = (paused) => onProgress && onProgress(snapshot(paused));
   const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
     if (CONFIG.debug && failed.length) {
       const byCode = {};
       failed.forEach((f) => (byCode[f.code] = (byCode[f.code] || 0) + 1));
@@ -123,14 +133,14 @@ export function doBlacklistMany(targets, cb, onProgress) {
       saveConfig();
       emitRulesChanged();
     }
-    cb && cb({ added, already, failed, total: list.length });
+    cb && cb({ added, already, failed, total: list.length, done, cancelled });
   };
   const next = () => {
-    if (i >= list.length) return finish();
+    if (cancelled || i >= list.length) return finish();
     // 熔断中：等退避窗口结束再继续，并把“暂停中 + 已完成进度”实时告知调用方（避免界面看起来无响应）
     if (riskGuard.blocked()) {
       report(true);
-      setTimeout(next, riskGuard.remaining() + 50);
+      timer = setTimeout(next, riskGuard.remaining() + 50);
       return;
     }
     const t = list[i++];
@@ -143,13 +153,22 @@ export function doBlacklistMany(targets, cb, onProgress) {
         else if (code === 22120) already++;
         else failed.push({ uid: t.uid, code });
         report(false);
-        setTimeout(next, BL_DELAY + Math.random() * BL_JITTER);
+        if (cancelled) return finish(); // 停止：在途请求收尾后即结束，不再排下一个
+        timer = setTimeout(next, BL_DELAY + Math.random() * BL_JITTER);
       },
       true
     );
   };
   if (!list.length) finish();
   else next();
+  // 返回控制器：cancel() 中断后续拉黑（在途请求会先正常完成；等待中则立即收尾）。
+  return {
+    cancel() {
+      if (finished) return;
+      cancelled = true;
+      if (timer) finish();
+    },
+  };
 }
 
 // 入口：info 至少含 up；优先用 uid，没有则用 bvid 反查；都没有才退回按 UP 名本地屏蔽。

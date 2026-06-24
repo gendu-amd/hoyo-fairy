@@ -1679,6 +1679,9 @@
     let done = 0;
     let i = 0;
     const failed = [];
+    let cancelled = false;
+    let finished = false;
+    let timer = null;
     const snapshot = (paused) => ({
       done,
       added,
@@ -1687,10 +1690,17 @@
       fail: failed.length,
       total: list.length,
       paused: !!paused,
-      wait: paused ? Math.ceil(riskGuard.remaining() / 1e3) : 0
+      wait: paused ? Math.ceil(riskGuard.remaining() / 1e3) : 0,
+      cancelled
     });
     const report = (paused) => onProgress && onProgress(snapshot(paused));
     const finish = () => {
+      if (finished) return;
+      finished = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       if (CONFIG.debug && failed.length) {
         const byCode = {};
         failed.forEach((f) => byCode[f.code] = (byCode[f.code] || 0) + 1);
@@ -1700,13 +1710,13 @@
         saveConfig();
         emitRulesChanged();
       }
-      cb && cb({ added, already, failed, total: list.length });
+      cb && cb({ added, already, failed, total: list.length, done, cancelled });
     };
     const next = () => {
-      if (i >= list.length) return finish();
+      if (cancelled || i >= list.length) return finish();
       if (riskGuard.blocked()) {
         report(true);
-        setTimeout(next, riskGuard.remaining() + 50);
+        timer = setTimeout(next, riskGuard.remaining() + 50);
         return;
       }
       const t = list[i++];
@@ -1719,13 +1729,21 @@
           else if (code === 22120) already++;
           else failed.push({ uid: t.uid, code });
           report(false);
-          setTimeout(next, BL_DELAY + Math.random() * BL_JITTER);
+          if (cancelled) return finish();
+          timer = setTimeout(next, BL_DELAY + Math.random() * BL_JITTER);
         },
         true
       );
     };
     if (!list.length) finish();
     else next();
+    return {
+      cancel() {
+        if (finished) return;
+        cancelled = true;
+        if (timer) finish();
+      }
+    };
   }
   function blacklistUp(info, cb, cardEl) {
     let uid = info && info.uid ? String(info.uid) : "";
@@ -2861,11 +2879,22 @@
 
 会写入账号黑名单且不可一键撤销，确定？`)) return;
       const runBlacklist = (all) => {
+        const btn = batch.querySelector("#bfb-batch-block");
+        const origLabel = btn.textContent;
+        btn.disabled = true;
         toast(`开始拉黑 ${all.length} 位…`);
-        doBlacklistMany(all, (r) => {
-          toast(`批量拉黑完成：新拉黑 ${r.added}，已在黑名单 ${r.already}${r.failed.length ? `，失败 ${r.failed.length}（多为未登录/风控/已满）` : ""}`);
-          refreshPanelIfOpen2();
-        });
+        doBlacklistMany(
+          all,
+          (r) => {
+            btn.disabled = false;
+            btn.textContent = origLabel;
+            toast(`批量拉黑完成：新拉黑 ${r.added}，已在黑名单 ${r.already}${r.failed.length ? `，失败 ${r.failed.length}（多为未登录/风控/已满）` : ""}`);
+            refreshPanelIfOpen2();
+          },
+          (pg) => {
+            btn.textContent = pg.paused ? `⚠ 风控暂停 ${pg.wait}s · ${pg.done}/${pg.total}` : `拉黑中 ${pg.done}/${pg.total}…`;
+          }
+        );
       };
       if (!toResolve.length) {
         runBlacklist(direct);
@@ -2895,6 +2924,7 @@
       <div class="toolbar" style="margin-top:6px">
         <button class="act" id="bfb-list-hide">仅屏蔽（本地）</button>
         <button class="act ghost" id="bfb-list-block" style="color:#e74c3c">⛔ 拉黑（写账号黑名单）</button>
+        <button class="act ghost" id="bfb-list-stop" style="display:none;color:#e67e22">⏹ 停止</button>
       </div>
       <div class="hint">「仅屏蔽」只在本地隐藏、不碰账号；「拉黑」会写入账号黑名单（刷新后不再推荐），限速执行、触发风控自动暂停续传、<b>不可一键撤销</b>、执行前二次确认。只有名称没 UID 的，拉黑时自动降级为仅本地屏蔽。拉黑成功的会进下方「屏蔽记录」。</div>
       <div id="bfb-list-status" class="stat" style="margin-top:6px;min-height:1.2em"></div>`;
@@ -2960,9 +2990,10 @@
       const est = Math.ceil(uids.length * 1.3);
       const nameTip = names.length ? `
 另有 ${names.length} 个只有名称（无 UID）→ 仅本地屏蔽，不写账号` : "";
-      if (uids.length && !confirm(`将把 ${uids.length} 个 UID 写入你的账号黑名单（限速约 ${est} 秒起，触发风控会自动暂停续传、耗时更久），不可一键撤销。${nameTip}
+      const limitTip = uids.length > 200 ? "\n数量较多：账号黑名单有总量上限，且单日大批量操作更易触发风控，建议分批进行。" : "";
+      if (uids.length && !confirm(`将把 ${uids.length} 个 UID 写入你的账号黑名单（限速约 ${est} 秒起，触发风控会自动暂停续传、耗时更久），不可一键撤销。${nameTip}${limitTip}
 
-执行期间请保持此页面打开。确定继续？`)) return;
+执行期间请保持此页面打开，可随时点「停止」中断。确定继续？`)) return;
       const nLocal = addLocalMany([], names);
       if (!uids.length) {
         toast(`无 UID 可账号拉黑；已本地屏蔽 ${nLocal} 个名称`);
@@ -2972,16 +3003,28 @@
       }
       toast(`开始拉黑 ${uids.length} 个…执行期间请勿关闭面板`);
       listStatus.textContent = `准备拉黑 ${uids.length} 个…`;
-      doBlacklistMany(
+      const stopBtn = listSec.querySelector("#bfb-list-stop");
+      const blockBtn = listSec.querySelector("#bfb-list-block");
+      const resetButtons = () => {
+        stopBtn.style.display = "none";
+        stopBtn.disabled = false;
+        stopBtn.textContent = "⏹ 停止";
+        blockBtn.disabled = false;
+      };
+      const ctl = doBlacklistMany(
         uids.map((u) => ({ uid: u, name: "" })),
         (r) => {
+          resetButtons();
           const failUids = r.failed.map((f) => f.uid);
           const byCode = {};
           r.failed.forEach((f) => byCode[f.code] = (byCode[f.code] || 0) + 1);
           const failBreak = Object.entries(byCode).map(([c, n]) => `${REL_ERR[c] || "code " + c}×${n}`).join("、");
-          listStatus.innerHTML = `✅ 完成（共 ${r.total}）：<b>新拉黑 ${r.added}</b>` + (r.already ? ` · 此前已在黑名单 ${r.already}` : "") + (failUids.length ? ` · <b style="color:#e74c3c">失败 ${failUids.length}</b>（${escapeHtml(failBreak)}；已回填可重试）` : "") + (nLocal ? ` · 另本地屏蔽 ${nLocal} 名称` : "") + `<br><span style="color:#888">官方黑名单本次新增 = 新拉黑 ${r.added} 个（"已在黑名单"的不会再叠加；如仍对不上，多为风控/已满，开调试模式看控制台 code 明细）</span>`;
-          listTa.value = failUids.length ? failUids.join("\n") : "";
-          toast(`完成：新拉黑 ${r.added}，已在黑名单 ${r.already}，失败 ${failUids.length}`);
+          const head = r.cancelled ? `⏹ 已停止（已处理 ${r.done}/${r.total}）：` : `✅ 完成（共 ${r.total}）：`;
+          listStatus.innerHTML = `${head}<b>新拉黑 ${r.added}</b>` + (r.already ? ` · 此前已在黑名单 ${r.already}` : "") + (failUids.length ? ` · <b style="color:#e74c3c">失败 ${failUids.length}</b>（${escapeHtml(failBreak)}；已回填可重试）` : "") + (nLocal ? ` · 另本地屏蔽 ${nLocal} 名称` : "") + `<br><span style="color:#888">官方黑名单本次新增 = 新拉黑 ${r.added} 个（“已在黑名单”的不会再叠加；如仍对不上，多为风控/已满，开调试模式看控制台 code 明细）</span>`;
+          const remain = r.cancelled ? uids.slice(r.done) : [];
+          const refill = failUids.concat(remain);
+          listTa.value = refill.length ? refill.join("\n") : "";
+          toast(`${r.cancelled ? "已停止" : "完成"}：新拉黑 ${r.added}，已在黑名单 ${r.already}，失败 ${failUids.length}`);
           if (panelStatsRefresh) panelStatsRefresh();
         },
         (pg) => {
@@ -2989,6 +3032,14 @@
           if (panelStatsRefresh) panelStatsRefresh();
         }
       );
+      blockBtn.disabled = true;
+      stopBtn.style.display = "";
+      stopBtn.onclick = () => {
+        stopBtn.disabled = true;
+        stopBtn.textContent = "停止中…";
+        listStatus.textContent = "停止中：等当前这一个完成后收尾…";
+        ctl.cancel();
+      };
     };
     const tool = document.createElement("div");
     tool.className = "sec toolbar";
