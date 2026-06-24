@@ -18,7 +18,7 @@ import { extractCardInfo } from '../cardinfo';
 import { fetchView, cachedUid } from '../api';
 import { applyHotSearchStyle } from '../hotsearch';
 import { toast, updateBadge } from './toast';
-import { confirmModal } from './confirm';
+import { confirmModal, promptModal } from './confirm';
 import { renderListField, chipModel, bindControl, renderFields } from './field';
 import { hideHoverBtn } from './menu';
 import './panel.styles';
@@ -469,7 +469,7 @@ let panelStatsRefresh = null; // 面板打开时的「屏蔽记录」刷新器�
         const e = store[sub.url] || {};
         const status = e.ok ? `✅ ${e.count || 0} 条 · ${fmtSubTime(e.lastSync)}` : e.error ? `⚠ ${e.error}` : '未同步';
         const row = document.createElement('div');
-        row.style.cssText = 'border:1px solid #eee;border-radius:8px;padding:8px;margin-top:6px;background:#fafafa';
+        row.className = 'bfb-sub-row';
         row.innerHTML = `
           <label class="switch" style="margin:0"><input type="checkbox" class="sub-en" ${sub.enabled ? 'checked' : ''}> <b>${escapeHtml(sub.name || metaGet(e.meta, 'title') || '订阅')}</b></label>
           <div style="font-size:11px;color:#aaa;word-break:break-all;margin-top:4px">${escapeHtml(sub.url)}</div>
@@ -612,7 +612,7 @@ let panelStatsRefresh = null; // 面板打开时的「屏蔽记录」刷新器�
     const listSec = document.createElement('div');
     listSec.className = 'sec';
     listSec.innerHTML = `<label>名单批量处理（粘贴 / 文件 / URL）</label>
-      <textarea id="bfb-list-input" rows="4" placeholder="粘贴一批 UID 或 UP 名，空格 / 逗号 / 换行 / 分号 分隔均可。&#10;纯数字按 UID；其它按 UP 名；也支持 uid:123 / up:名字 前缀。" style="width:100%;box-sizing:border-box;resize:vertical;font-family:monospace;font-size:12px;padding:6px;border:1px solid #ddd;border-radius:6px"></textarea>
+      <textarea id="bfb-list-input" class="bfb-listta" rows="4" placeholder="粘贴一批 UID 或 UP 名，空格 / 逗号 / 换行 / 分号 分隔均可。&#10;纯数字按 UID；其它按 UP 名；也支持 uid:123 / up:名字 前缀。"></textarea>
       <div class="toolbar" style="margin-top:6px">
         <button class="act ghost" id="bfb-list-file">📁 从文件载入</button>
         <button class="act ghost" id="bfb-list-url">🔗 从 URL 载入</button>
@@ -657,23 +657,25 @@ let panelStatsRefresh = null; // 面板打开时的「屏蔽记录」刷新器�
       inp.click();
     };
     listSec.querySelector('#bfb-list-url').onclick = () => {
-      const url = (prompt('输入名单 URL（纯文本：每行一个 UID 或 UP 名）：') || '').trim();
-      if (!url) return;
-      if (!/^https?:\/\//i.test(url)) return toast('请输入有效的 http(s) URL');
-      if (typeof GM_xmlhttpRequest !== 'function') return toast('当前环境不支持联网载入');
-      toast('载入中…');
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url,
-        timeout: 15000,
-        onload: (r) => {
-          if (r.status >= 200 && r.status < 300 && r.responseText) {
-            listTa.value = (listTa.value ? listTa.value + '\n' : '') + r.responseText;
-            toast('已载入 URL 内容到输入框，确认后点 仅屏蔽 / 拉黑');
-          } else toast('载入失败：HTTP ' + r.status);
-        },
-        onerror: () => toast('网络错误，载入失败'),
-        ontimeout: () => toast('载入超时'),
+      promptModal('输入名单 URL（纯文本：每行一个 UID 或 UP 名）：', { title: '从 URL 载入', placeholder: 'https://…', okText: '载入' }).then((input) => {
+        const url = (input || '').trim();
+        if (!url) return;
+        if (!/^https?:\/\//i.test(url)) return toast('请输入有效的 http(s) URL', 'warn');
+        if (typeof GM_xmlhttpRequest !== 'function') return toast('当前环境不支持联网载入', 'warn');
+        toast('载入中…');
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url,
+          timeout: 15000,
+          onload: (r) => {
+            if (r.status >= 200 && r.status < 300 && r.responseText) {
+              listTa.value = (listTa.value ? listTa.value + '\n' : '') + r.responseText;
+              toast('已载入 URL 内容到输入框，确认后点 仅屏蔽 / 拉黑', 'success');
+            } else toast('载入失败：HTTP ' + r.status, 'error');
+          },
+          onerror: () => toast('网络错误，载入失败', 'error'),
+          ontimeout: () => toast('载入超时', 'error'),
+        });
       });
     };
     listSec.querySelector('#bfb-list-hide').onclick = () => {

@@ -1905,12 +1905,9 @@
 
   // src/ui/confirm.ts
   var current = null;
-  function confirmModal(message, opts = {}) {
+  function baseModal(opts, fill) {
     return new Promise((resolve) => {
-      if (current) {
-        current.remove();
-        current = null;
-      }
+      if (current) current.close();
       const back = document.createElement("div");
       back.className = "bfb-modal-back";
       const box = document.createElement("div");
@@ -1920,51 +1917,85 @@
       const title = document.createElement("div");
       title.className = "bfb-modal-title";
       title.textContent = opts.title || "确认操作";
-      const msg = document.createElement("div");
-      msg.className = "bfb-modal-msg";
-      msg.textContent = message;
-      const btns = document.createElement("div");
-      btns.className = "bfb-modal-btns";
-      const cancel = document.createElement("button");
-      cancel.type = "button";
-      cancel.className = "bfb-modal-btn ghost";
-      cancel.textContent = opts.cancelText || "取消";
-      const ok = document.createElement("button");
-      ok.type = "button";
-      ok.className = "bfb-modal-btn" + (opts.danger ? " danger" : "");
-      ok.textContent = opts.okText || "确定";
-      btns.append(cancel, ok);
-      box.append(title, msg, btns);
-      back.appendChild(box);
-      (document.body || document.documentElement).appendChild(back);
-      current = back;
+      box.appendChild(title);
       let done = false;
-      const close = (val) => {
+      const ctl = { close: () => settle(null) };
+      const settle = (v) => {
         if (done) return;
         done = true;
         document.removeEventListener("keydown", onKey, true);
         back.remove();
-        if (current === back) current = null;
-        resolve(val);
+        if (current === ctl) current = null;
+        resolve(v);
       };
+      let valueGetter = () => null;
+      const submit = () => settle(valueGetter());
+      const cancel = () => settle(null);
       const onKey = (e) => {
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          close(false);
+          cancel();
         } else if (e.key === "Enter") {
           e.preventDefault();
           e.stopPropagation();
-          close(true);
+          submit();
         }
       };
-      cancel.onclick = () => close(false);
-      ok.onclick = () => close(true);
+      const filled = fill(box, submit, cancel);
+      valueGetter = filled.value;
+      back.appendChild(box);
+      (document.body || document.documentElement).appendChild(back);
+      current = ctl;
       back.onclick = (e) => {
-        if (e.target === back) close(false);
+        if (e.target === back) cancel();
       };
       document.addEventListener("keydown", onKey, true);
-      (opts.danger ? cancel : ok).focus();
+      (filled.focus || box).focus();
+    });
+  }
+  function mkBtns(opts, submit, cancel) {
+    const btns = document.createElement("div");
+    btns.className = "bfb-modal-btns";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "bfb-modal-btn ghost";
+    cancelBtn.textContent = opts.cancelText || "取消";
+    cancelBtn.onclick = cancel;
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "bfb-modal-btn" + (opts.danger ? " danger" : "");
+    ok.textContent = opts.okText || "确定";
+    ok.onclick = submit;
+    btns.append(cancelBtn, ok);
+    return { btns, ok: opts.danger ? cancelBtn : ok };
+  }
+  function confirmModal(message, opts = {}) {
+    return baseModal(opts, (box, submit, cancel) => {
+      const msg = document.createElement("div");
+      msg.className = "bfb-modal-msg";
+      msg.textContent = message;
+      box.appendChild(msg);
+      const { btns, ok } = mkBtns(opts, submit, cancel);
+      box.appendChild(btns);
+      return { focus: ok, value: () => true };
+    }).then((v) => v === true);
+  }
+  function promptModal(message, opts = {}) {
+    return baseModal(opts, (box, submit, cancel) => {
+      const msg = document.createElement("div");
+      msg.className = "bfb-modal-msg";
+      msg.textContent = message;
+      box.appendChild(msg);
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "bfb-modal-input";
+      if (opts.placeholder) input.placeholder = opts.placeholder;
+      if (opts.value) input.value = opts.value;
+      box.appendChild(input);
+      const { btns } = mkBtns(opts, submit, cancel);
+      box.appendChild(btns);
+      return { focus: input, value: () => input.value };
     });
   }
 
@@ -2512,6 +2543,10 @@
     .bfb-modal-btn.ghost{background:#f0f0f0;color:#444}
     .bfb-modal-btn.danger{background:#e74c3c}
     .bfb-modal-btn:focus-visible{outline:2px solid #222;outline-offset:2px}
+    .bfb-modal-input{display:block;width:calc(100% - 32px);margin:0 16px 12px;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;box-sizing:border-box;background:#fff;color:#222}
+    .bfb-modal-input:focus{outline:none;border-color:#fb7299;box-shadow:0 0 0 2px rgba(251,114,153,.18)}
+    #bfb-panel .bfb-sub-row{border:1px solid #eee;border-radius:8px;padding:8px;margin-top:6px;background:#fafafa}
+    #bfb-panel .bfb-listta{width:100%;box-sizing:border-box;resize:vertical;font-family:monospace;font-size:12px;padding:6px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#222}
     #bfb-panel{position:fixed;top:0;right:0;width:400px;max-width:94vw;height:100vh;z-index:100000;background:#fff;box-shadow:-4px 0 24px rgba(0,0,0,.2);overflow:auto;overscroll-behavior:contain;font-family:system-ui,Arial;transform:translateX(100%);transition:transform .25s}
     #bfb-panel.open{transform:translateX(0)}
     #bfb-panel h2{margin:0;padding:14px 16px;background:#fb7299;color:#fff;font-size:16px;position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;z-index:2}
@@ -2608,6 +2643,10 @@
       #bfb-panel label{color:#cfcfd6}
       #bfb-panel .switch,#bfb-panel button.ghost{color:#d0d0d6}
       #bfb-panel .hint,#bfb-panel .stat,#bfb-panel .grp-tip{color:#8a8a92}
+      #bfb-panel .grp-tip{background:#232328;border-bottom-color:#2c2c32}
+      #bfb-panel .bfb-sub-row{background:#232328;border-color:#34343a}
+      #bfb-panel .bfb-listta{background:#26262b;color:#e6e6e9;border-color:#44444c}
+      .bfb-modal-input{background:#26262b;color:#e6e6e9;border-color:#44444c}
       #bfb-panel .empty{color:#9a9aa2}
       #bfb-panel .addrow input,#bfb-panel input[type=number]{background:#26262b;border-color:#44444c;color:#e6e6e9}
       #bfb-panel button.ghost{background:#2e2e34}
@@ -3037,7 +3076,7 @@
         const e = store[sub.url] || {};
         const status = e.ok ? `✅ ${e.count || 0} 条 · ${fmtSubTime(e.lastSync)}` : e.error ? `⚠ ${e.error}` : "未同步";
         const row = document.createElement("div");
-        row.style.cssText = "border:1px solid #eee;border-radius:8px;padding:8px;margin-top:6px;background:#fafafa";
+        row.className = "bfb-sub-row";
         row.innerHTML = `
           <label class="switch" style="margin:0"><input type="checkbox" class="sub-en" ${sub.enabled ? "checked" : ""}> <b>${escapeHtml(sub.name || metaGet(e.meta, "title") || "订阅")}</b></label>
           <div style="font-size:11px;color:#aaa;word-break:break-all;margin-top:4px">${escapeHtml(sub.url)}</div>
@@ -3180,7 +3219,7 @@
     const listSec = document.createElement("div");
     listSec.className = "sec";
     listSec.innerHTML = `<label>名单批量处理（粘贴 / 文件 / URL）</label>
-      <textarea id="bfb-list-input" rows="4" placeholder="粘贴一批 UID 或 UP 名，空格 / 逗号 / 换行 / 分号 分隔均可。&#10;纯数字按 UID；其它按 UP 名；也支持 uid:123 / up:名字 前缀。" style="width:100%;box-sizing:border-box;resize:vertical;font-family:monospace;font-size:12px;padding:6px;border:1px solid #ddd;border-radius:6px"></textarea>
+      <textarea id="bfb-list-input" class="bfb-listta" rows="4" placeholder="粘贴一批 UID 或 UP 名，空格 / 逗号 / 换行 / 分号 分隔均可。&#10;纯数字按 UID；其它按 UP 名；也支持 uid:123 / up:名字 前缀。"></textarea>
       <div class="toolbar" style="margin-top:6px">
         <button class="act ghost" id="bfb-list-file">📁 从文件载入</button>
         <button class="act ghost" id="bfb-list-url">🔗 从 URL 载入</button>
@@ -3221,23 +3260,25 @@
       inp.click();
     };
     listSec.querySelector("#bfb-list-url").onclick = () => {
-      const url = (prompt("输入名单 URL（纯文本：每行一个 UID 或 UP 名）：") || "").trim();
-      if (!url) return;
-      if (!/^https?:\/\//i.test(url)) return toast("请输入有效的 http(s) URL");
-      if (typeof GM_xmlhttpRequest !== "function") return toast("当前环境不支持联网载入");
-      toast("载入中…");
-      GM_xmlhttpRequest({
-        method: "GET",
-        url,
-        timeout: 15e3,
-        onload: (r) => {
-          if (r.status >= 200 && r.status < 300 && r.responseText) {
-            listTa.value = (listTa.value ? listTa.value + "\n" : "") + r.responseText;
-            toast("已载入 URL 内容到输入框，确认后点 仅屏蔽 / 拉黑");
-          } else toast("载入失败：HTTP " + r.status);
-        },
-        onerror: () => toast("网络错误，载入失败"),
-        ontimeout: () => toast("载入超时")
+      promptModal("输入名单 URL（纯文本：每行一个 UID 或 UP 名）：", { title: "从 URL 载入", placeholder: "https://…", okText: "载入" }).then((input) => {
+        const url = (input || "").trim();
+        if (!url) return;
+        if (!/^https?:\/\//i.test(url)) return toast("请输入有效的 http(s) URL", "warn");
+        if (typeof GM_xmlhttpRequest !== "function") return toast("当前环境不支持联网载入", "warn");
+        toast("载入中…");
+        GM_xmlhttpRequest({
+          method: "GET",
+          url,
+          timeout: 15e3,
+          onload: (r) => {
+            if (r.status >= 200 && r.status < 300 && r.responseText) {
+              listTa.value = (listTa.value ? listTa.value + "\n" : "") + r.responseText;
+              toast("已载入 URL 内容到输入框，确认后点 仅屏蔽 / 拉黑", "success");
+            } else toast("载入失败：HTTP " + r.status, "error");
+          },
+          onerror: () => toast("网络错误，载入失败", "error"),
+          ontimeout: () => toast("载入超时", "error")
+        });
       });
     };
     listSec.querySelector("#bfb-list-hide").onclick = () => {
