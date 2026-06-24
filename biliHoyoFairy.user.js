@@ -2571,7 +2571,7 @@
     #bfb-panel.open{transform:translateX(0)}
     #bfb-panel h2{margin:0;padding:14px 16px;background:#fb7299;color:#fff;font-size:16px;position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;z-index:2}
     #bfb-panel h2 .x{cursor:pointer}
-    #bfb-panel .sec{padding:10px 16px;border-bottom:1px solid #f0f0f0}
+    #bfb-panel .sec{padding:13px 16px;border-bottom:1px solid #f0f0f0}
     #bfb-panel .sec.allow{background:#f3fbf4}
     #bfb-panel label{font-size:13px;color:#444;display:block;margin-bottom:6px;font-weight:600}
     #bfb-panel .addrow{display:flex;gap:6px}
@@ -2584,11 +2584,11 @@
     #bfb-panel .chip b:hover{opacity:1}
     #bfb-panel .empty{font-size:11px;color:#767676;margin-top:6px}
     #bfb-panel input[type=number]{width:80px;padding:4px 6px;border:1px solid #ddd;border-radius:6px}
-    #bfb-panel .hint{font-size:11px;color:#6e6e6e;margin-top:4px}
+    #bfb-panel .hint{font-size:11px;color:#6e6e6e;margin-top:7px;line-height:1.7}
     #bfb-panel .toolbar{display:flex;gap:8px;flex-wrap:wrap}
     #bfb-panel button.act{background:#fb7299;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font-size:13px}
     #bfb-panel button.ghost{background:#f3f3f3;color:#333}
-    #bfb-panel .switch{display:flex;align-items:center;gap:8px;font-size:13px;color:#333;font-weight:600;margin-top:6px}
+    #bfb-panel .switch{display:flex;align-items:center;gap:8px;font-size:13px;color:#333;font-weight:600;margin-top:9px;line-height:1.5}
     #bfb-panel .stat{font-size:12px;color:#6e6e6e}
     #bfb-panel a.manage{color:#fb7299;font-size:12px}
     #bfb-panel .sec.api{background:#f5f3ff}
@@ -2728,7 +2728,7 @@
     ["tools", "🧰 工具", "预置库、重置、屏蔽记录"]
   ];
   var BLACK_FIELDS = [
-    { key: "keywords", label: "🎯 关键词", placeholder: "如：原神 或 /震惊.*竟然/", hint: "匹配标题、UP 主名、分区任一即拦截（纯本地，无需联网）。普通词为包含匹配，以 /.../ 包裹为正则，如 /一口气.*看完/。可加作用域前缀只匹配指定字段：title:词、up:词、part:词（如 up:营销号 仅按 UP 主名拦截）。如需按视频标签拦截，请使用下方「视频标签」（需开启精确过滤）。" },
+    { key: "keywords", label: "🎯 关键词", placeholder: "如：原神 或 /震惊.*竟然/", hint: "匹配标题、UP 主名、分区任一即拦截（纯本地）。普通词为包含匹配，/.../ 为正则。可加前缀限定字段：title: / up: / part:。按视频标签拦截请用下方「视频标签」。" },
     { kind: "up", label: "UP 主", hint: "输入 UP 名 或 UID（纯数字自动识别为 UID）；可一次粘贴多条，用逗号或换行分隔。" },
     { key: "bvids", label: "BV 号", placeholder: "如：BV1xx411c7XX", hint: "按视频 BV 号精确屏蔽单个视频。" },
     { key: "partitions", label: "视频分区", placeholder: "如：资讯 或 /综艺|娱乐/", hint: "按视频分区（tname）屏蔽，网络拦截层判定最准。普通词为包含匹配，以 /.../ 包裹为正则。" }
@@ -2827,7 +2827,7 @@
       <div class="switch" style="margin-top:4px;font-weight:400">播放量低于 <input type="number" id="bfb-minviews" min="0" step="0.1" style="width:64px"> 万则屏蔽（0 为不启用）</div>
       <div class="switch" style="margin-top:8px;font-weight:400">时长　最短 <input type="number" id="bfb-dmin" min="0" style="width:64px"> 秒　最长 <input type="number" id="bfb-dmax" min="0" style="width:64px"> 秒</div>
       <div class="switch" style="margin-top:8px;font-weight:400">营销号：点赞率低于 <input type="number" id="bfb-spamratio" min="0" max="100" step="0.1" style="width:56px"> % 且播放量≥ <input type="number" id="bfb-spamviews" min="0" step="1" style="width:56px"> 万则屏蔽</div>
-      <div class="hint">填 0 表示该项不启用。营销号、搬运号常表现为「高播放、极低赞」。⚠ 点赞率<b>仅在接口返回点赞数时生效（主要为首页推荐流）</b>；无法获取点赞数的卡片（部分 SSR / 动态）会跳过此项，不影响其它规则。</div>`;
+      <div class="hint">填 0 表示该项不启用。营销号、搬运号常表现为「高播放、极低赞」。⚠ 点赞率<b>仅在接口返回点赞数时生效（主要为首页推荐流）</b>，其余卡片会自动跳过此项。</div>`;
     G.api.appendChild(num);
     bindControl(num, "bfb-minviews", CONFIG.block, "minViews", { number: true, after: rescanAfterRuleChange });
     bindControl(num, "bfb-dmin", CONFIG.block, "minDuration", { number: true, int: true, after: rescanAfterRuleChange });
@@ -2930,7 +2930,7 @@
     renderFields(G.allow, ALLOW_FIELDS);
     const preset = document.createElement("div");
     preset.className = "sec";
-    preset.innerHTML = '<label>预置规则库（点击加入对应黑名单，可叠加）</label><div class="hint">这是「一键批量添加」入口，本身不是规则；添加后真正生效的规则可在「黑名单」页增删。需要持续更新的大名单请使用「规则订阅」。</div><div id="bfb-presets"></div>';
+    preset.innerHTML = '<label>预置规则库（点击加入对应黑名单，可叠加）</label><div class="hint">一键把整组规则加入「黑名单」（之后可在黑名单页增删）。需要持续更新的大名单请用「规则订阅」。</div><div id="bfb-presets"></div>';
     G.tools.appendChild(preset);
     const presetBox = preset.querySelector("#bfb-presets");
     const applyPreset = (p2) => {
@@ -3076,7 +3076,7 @@
     subSec.innerHTML = `<label>规则订阅（从 URL 自动拉取并合并黑名单）</label>
       <div class="addrow"><input type="text" id="bfb-sub-url" placeholder="订阅 URL（JSON 或文本，如 GitHub raw）"></div>
       <div class="addrow" style="margin-top:6px"><input type="text" id="bfb-sub-name" placeholder="备注名（可选）"><button id="bfb-sub-add">添加</button></div>
-      <div class="hint">订阅只并入<b>黑名单</b>（UID、UP 主名、关键词、分区、标签、简介、BV 号），不影响你的白名单与开关；启用后按列表声明的周期自动刷新。</div>
+      <div class="hint">订阅只并入<b>黑名单</b>（UID、UP 主名、关键词、分区、标签、简介、BV 号），不影响你的白名单与开关；启用后按声明周期自动刷新。自建 / 共享名单见仓库 examples/ 模板。</div>
       <div class="toolbar" style="margin-top:8px"><button class="act ghost" id="bfb-sub-refresh">🔄 全部刷新</button></div>
       <div id="bfb-sub-list" style="margin-top:8px"></div>`;
     G.tools.appendChild(subSec);
@@ -3250,7 +3250,7 @@
         <button class="act ghost" id="bfb-list-block" style="color:#e74c3c">⛔ 拉黑（写账号黑名单）</button>
         <button class="act ghost" id="bfb-list-stop" style="display:none;color:#e67e22">⏹ 停止</button>
       </div>
-      <div class="hint">「仅屏蔽」只在本地隐藏、不涉及账号；「拉黑」会写入账号黑名单（刷新后不再推荐），限速执行、触发风控时自动暂停续传、<b>不可一键撤销</b>、执行前二次确认。仅有名称、无 UID 的条目，拉黑时自动降级为仅本地屏蔽。拉黑成功的条目会记入下方「屏蔽记录」。</div>
+      <div class="hint">「仅屏蔽」只在本地隐藏；「拉黑」会写入账号黑名单（限速执行、触发风控自动续传、<b>不可一键撤销</b>、执行前确认）。仅有名称、无 UID 的条目将降级为本地屏蔽。</div>
       <div id="bfb-list-status" class="stat" style="margin-top:6px;min-height:1.2em"></div>`;
     G.tools.insertBefore(listSec, subSec);
     const listTa = listSec.querySelector("#bfb-list-input");
