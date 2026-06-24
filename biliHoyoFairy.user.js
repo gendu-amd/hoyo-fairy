@@ -1792,6 +1792,10 @@
   }
 
   // src/ui/menu.ts
+  function confirmBlacklist(name) {
+    return confirm(`确定拉黑「${name}」并写入账号黑名单？
+刷新后不再推荐、不可一键撤销（未登录则仅本地屏蔽）。`);
+  }
   var ctxMenuEl = null;
   function closeCtxMenu() {
     if (ctxMenuEl) {
@@ -1867,7 +1871,9 @@
       });
       items.push({
         label: `⛔ 拉黑UP「${info.up}」(同步账号黑名单)`,
-        act: () => blacklistUp(info, refreshPanelIfOpen, card)
+        act: () => {
+          if (confirmBlacklist(info.up)) blacklistUp(info, refreshPanelIfOpen, card);
+        }
       });
       items.push({
         label: `⭐ 加白名单(永不屏蔽此UP)`,
@@ -1957,6 +1963,7 @@
         toast("该卡片信息不足，无法拉黑");
         return;
       }
+      if (!confirmBlacklist(info.up || info.bvid)) return;
       blacklistUp(info, refreshPanelIfOpen, hoverCard);
       hideHoverBtn();
     };

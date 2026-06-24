@@ -12,6 +12,11 @@ import { addToList } from '../rules';
 import { toast } from './toast';
 import { refreshPanelIfOpen, openPanel } from './hooks';
 
+// 账号拉黑是不可一键撤销的账号写操作，且与「本地屏蔽」相邻、易误点 → 执行前二次确认。
+function confirmBlacklist(name) {
+  return confirm(`确定拉黑「${name}」并写入账号黑名单？\n刷新后不再推荐、不可一键撤销（未登录则仅本地屏蔽）。`);
+}
+
 let ctxMenuEl = null;
 function closeCtxMenu() {
   if (ctxMenuEl) {
@@ -94,7 +99,9 @@ export function onContextMenu(e) {
     });
     items.push({
       label: `⛔ 拉黑UP「${info.up}」(同步账号黑名单)`,
-      act: () => blacklistUp(info, refreshPanelIfOpen, card),
+      act: () => {
+        if (confirmBlacklist(info.up)) blacklistUp(info, refreshPanelIfOpen, card);
+      },
     });
     items.push({
       label: `⭐ 加白名单(永不屏蔽此UP)`,
@@ -196,6 +203,7 @@ function ensureHoverBtn() {
       toast('该卡片信息不足，无法拉黑');
       return;
     }
+    if (!confirmBlacklist(info.up || info.bvid)) return;
     blacklistUp(info, refreshPanelIfOpen, hoverCard);
     hideHoverBtn();
   };
