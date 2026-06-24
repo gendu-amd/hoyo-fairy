@@ -15,7 +15,7 @@ export function metaGet(meta: any, key: string): any {
   return undefined;
 }
 
-function cmpVer(a: string, b: string): number {
+export function cmpVer(a: string, b: string): number {
   const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
   const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {

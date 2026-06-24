@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CONFIG, DEFAULT_CONFIG } from '../src/config';
-import { matchRule, rebuildRules } from '../src/match/engine';
+import { matchRule, matchApi, apiNeeds, rebuildRules } from '../src/match/engine';
 import type { CardInfo } from '../src/cardinfo';
 
 // 每个用例从默认配置开始，改完配置后 rebuildRules() 让匹配器生效。
@@ -85,5 +85,55 @@ describe('matchRule：本地同步维度', () => {
 
   it('无任何规则命中 → null', () => {
     expect(matchRule(card({ title: '普通视频', up: '普通up', uid: '999' }))).toBe(null);
+  });
+});
+
+describe('apiNeeds：按启用的联网维度推导要拉的接口', () => {
+  it('默认无联网规则 → 全 false', () => {
+    expect(apiNeeds()).toEqual({ needTag: false, needView: false, needCard: false });
+  });
+  it('视频标签规则 → needTag', () => {
+    CONFIG.block.tags.push('鬼畜');
+    rebuildRules();
+    expect(apiNeeds().needTag).toBe(true);
+  });
+  it('充电专属 → needView', () => {
+    CONFIG.hideCharging = true;
+    rebuildRules();
+    expect(apiNeeds().needView).toBe(true);
+  });
+  it('UP 简介 → needCard 且连带 needView', () => {
+    CONFIG.block.upBio.push('恰饭');
+    rebuildRules();
+    const n = apiNeeds();
+    expect(n.needCard).toBe(true);
+    expect(n.needView).toBe(true);
+  });
+});
+
+describe('matchApi：联网维度', () => {
+  it('标签命中（任一标签 textHit）', () => {
+    CONFIG.block.tags.push('鬼畜');
+    rebuildRules();
+    expect(matchApi(card(), null, ['鬼畜', '搞笑'], null)).toBe('标签:鬼畜');
+    expect(matchApi(card(), null, ['日常'], null)).toBe(null);
+  });
+  it('双标签：需全部子标签命中', () => {
+    CONFIG.block.dualTags.push('原神+抽卡');
+    rebuildRules();
+    expect(matchApi(card(), null, ['原神', '抽卡', '日常'], null)).toBe('双标签:原神+抽卡');
+    expect(matchApi(card(), null, ['原神'], null)).toBe(null);
+  });
+  it('充电专属（view.is_upower_exclusive）', () => {
+    CONFIG.hideCharging = true;
+    rebuildRules();
+    expect(matchApi(card(), { is_upower_exclusive: true }, null, null)).toBe('充电专属');
+    expect(matchApi(card(), { is_upower_exclusive: false }, null, null)).toBe(null);
+  });
+  it('UP 简介（cardData.card.sign）', () => {
+    CONFIG.block.upBio.push('恰饭');
+    rebuildRules();
+    expect(matchApi(card(), null, null, { card: { sign: '专业恰饭十年' } })).toBe('UP简介');
+    expect(matchApi(card(), null, null, { card: { sign: '佛系UP' } })).toBe(null);
   });
 });

@@ -1,5 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { deepMerge, mergeImport } from '../src/config';
+import { CONFIG, DEFAULT_CONFIG, deepMerge, mergeImport, exportConfig } from '../src/config';
+
+describe('exportConfig：剔除不可移植键（安全红线）', () => {
+  it('导出不含 subscriptions/uidNames/blockedCount/enabled/debug/reviewMode，但保留规则', () => {
+    Object.assign(CONFIG, structuredClone(DEFAULT_CONFIG));
+    (CONFIG.subscriptions as any).push({ url: 'https://evil.example/x.json', name: 'x', enabled: true });
+    CONFIG.uidNames['1'] = '某up';
+    CONFIG.blockedCount = 42;
+    CONFIG.block.keywords.push('原神');
+    const out = JSON.parse(exportConfig());
+    expect(out.config.subscriptions).toBeUndefined();
+    expect(out.config.uidNames).toBeUndefined();
+    expect(out.config.blockedCount).toBeUndefined();
+    expect(out.config.enabled).toBeUndefined();
+    expect(out.config.debug).toBeUndefined();
+    expect(out.config.reviewMode).toBeUndefined();
+    expect(out.config.block.keywords).toContain('原神'); // 规则照常导出
+  });
+});
 
 describe('deepMerge', () => {
   it('递归合并同名对象，标量覆盖', () => {
