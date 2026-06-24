@@ -174,6 +174,8 @@ npm test           # vitest 纯逻辑单测
 - **不要改 `constants.ts` 的 `STORE_KEY`**（会丢老用户本地配置）。
 - 产物**始终输出仓库根**单文件，保 `@updateURL` 自动更新链路；不引入 CDN/远程运行时加载。
 - 新增联网维度必须**默认关 + 缓存 + 限速**（防风控）。
+- **缓存/存档有界**：API `view/tag/card` 缓存用 `util.capMapSet` 限容；`CONFIG.uidNames` 软上限 5000。任何会随会话无界增长的结构都要设上限。
+- **DOM 观察器全量 `scanAll` 是有意为之**：单卡判定由 `PROCESSED` 短路，每批仅一次原生 `querySelectorAll`；增量化会牺牲 shadow/skeleton 覆盖，无 profiling 证据前不改。
 - `@updateURL` 指向 main = 合入即发布；对外可见改动要 bump `meta.js` 的 `@version`，否则用户不会自动更新。
 - 第三方致谢集中在 README，勿散落代码注释。
 - **安全红线**（0.0.6 起）：`@connect` 只声明已知域（B 站 + 常见 CDN），不留 `*`；配置**导出与导入都剔除 `NON_PORTABLE`**（尤其 `subscriptions`，防分享文件注入自动联网 URL）；订阅/导入的 `/正则/` 受 `MAX_REGEX_LEN` 长度上限保护（防 ReDoS）。
